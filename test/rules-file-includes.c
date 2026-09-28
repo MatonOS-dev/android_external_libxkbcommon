@@ -67,7 +67,7 @@ test_rules(struct xkb_context *ctx, struct test_data *data)
         fprintf(stderr, "Expecting: %s\t%s\t%s\t%s\n",
                 data->keycodes, data->types, data->compat, data->symbols);
 
-    if (!xkb_components_from_rules(ctx, &rmlvo, &kccgst)) {
+    if (!xkb_components_from_rules(ctx, &rmlvo, &kccgst, NULL)) {
         fprintf(stderr, "Received : FAILURE\n");
         return data->should_fail;
     }
@@ -92,6 +92,8 @@ int
 main(int argc, char *argv[])
 {
     struct xkb_context *ctx;
+
+    test_init();
 
     setenv("XKB_CONFIG_ROOT", TEST_XKB_CONFIG_ROOT, 1);
 
@@ -158,6 +160,22 @@ main(int argc, char *argv[])
         .compat = "default_compat", .symbols = "my_symbols",
     };
     assert(test_rules(ctx, &test6));
+
+    struct test_data test7 = {
+      .rules = "inc-no-newline",
+      .should_fail = true,
+    };
+    assert(test_rules(ctx, &test7));
+
+    struct test_data test8 = {
+        .rules = "inc-src-relative-path",
+
+        .model = "my_model", .layout = "my_layout", .variant = "", .options = "",
+
+        .keycodes = "my_keycodes", .types = "default_types",
+        .compat = "default_compat", .symbols = "my_symbols",
+    };
+    assert(test_rules(ctx, &test8));
 
     xkb_context_unref(ctx);
     return 0;

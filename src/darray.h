@@ -83,6 +83,7 @@ typedef darray (unsigned long)  darray_ulong;
 /*** Access ***/
 
 #define darray_item(arr, i)     ((arr).item[i])
+#define darray_items(arr)       ((arr).item)
 #define darray_size(arr)        ((arr).size)
 #define darray_empty(arr)       ((arr).size == 0)
 
@@ -111,8 +112,15 @@ typedef darray (unsigned long)  darray_ulong;
 #define darray_copy(arr_to, arr_from) \
     darray_from_items((arr_to), (arr_from).item, (arr_from).size)
 
-#define darray_concat(arr_to, arr_from) \
-    darray_append_items((arr_to), (arr_from).item, (arr_from).size)
+#define darray_concat(arr_to, arr_from) do { \
+    if ((arr_from).size > 0) \
+        darray_append_items((arr_to), (arr_from).item, (arr_from).size); \
+} while (0)
+
+/*** Removal ***/
+
+/* Warning: Do not call darray_remove_last on an empty darray. */
+#define darray_remove_last(arr) (--(arr).size)
 
 /*** String buffer ***/
 
@@ -176,10 +184,12 @@ typedef darray (unsigned long)  darray_ulong;
                              ((arr).alloc = (arr).size) * sizeof(*(arr).item)); \
 } while (0)
 
+#define darray_max_alloc(itemSize) (UINT_MAX / (itemSize))
+
 static inline unsigned
 darray_next_alloc(unsigned alloc, unsigned need, unsigned itemSize)
 {
-    assert(need < UINT_MAX / itemSize / 2); /* Overflow. */
+    assert(need < darray_max_alloc(itemSize) / 2); /* Overflow. */
     if (alloc == 0)
         alloc = 4;
     while (alloc < need)
@@ -190,23 +200,28 @@ darray_next_alloc(unsigned alloc, unsigned need, unsigned itemSize)
 /*** Traversal ***/
 
 #define darray_foreach(i, arr) \
+    if ((arr).item) \
     for ((i) = &(arr).item[0]; (i) < &(arr).item[(arr).size]; (i)++)
 
 #define darray_foreach_from(i, arr, from) \
+    if ((arr).item) \
     for ((i) = &(arr).item[from]; (i) < &(arr).item[(arr).size]; (i)++)
 
 /* Iterate on index and value at the same time, like Python's enumerate. */
 #define darray_enumerate(idx, val, arr) \
+    if ((arr).item) \
     for ((idx) = 0, (val) = &(arr).item[0]; \
          (idx) < (arr).size; \
          (idx)++, (val)++)
 
 #define darray_enumerate_from(idx, val, arr, from) \
-    for ((idx) = (from), (val) = &(arr).item[0]; \
+    if ((arr).item) \
+    for ((idx) = (from), (val) = &(arr).item[from]; \
          (idx) < (arr).size; \
          (idx)++, (val)++)
 
 #define darray_foreach_reverse(i, arr) \
+    if ((arr).item) \
     for ((i) = &(arr).item[(arr).size - 1]; (arr).size > 0 && (i) >= &(arr).item[0]; (i)--)
 
 #endif /* CCAN_DARRAY_H */

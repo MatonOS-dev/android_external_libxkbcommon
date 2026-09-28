@@ -25,8 +25,8 @@
 #define COMPOSE_COMPOSE_H
 
 #include "xkbcommon/xkbcommon-compose.h"
-#include "utils.h"
-#include "context.h"
+#include "src/utils.h"
+#include "src/context.h"
 
 /*
  * The compose table data structure is a ternary search tree.
@@ -75,16 +75,18 @@
  * \0 is so offset 0 points to an empty string).
  */
 
-/* Fits in uint16_t, also a good idea to have some limit. */
-#define MAX_COMPOSE_NODES 65535
+/* 7 nodes for every potential Unicode character and then some should be
+ * enough for all purposes. */
+#define MAX_COMPOSE_NODES_LOG2 23
+#define MAX_COMPOSE_NODES (1u << MAX_COMPOSE_NODES_LOG2)
 
 struct compose_node {
     xkb_keysym_t keysym;
 
     /* Offset into xkb_compose_table::nodes or 0. */
-    uint16_t lokid;
+    uint32_t lokid;
     /* Offset into xkb_compose_table::nodes or 0. */
-    uint16_t hikid;
+    uint32_t hikid;
 
     union {
         struct {
@@ -95,7 +97,7 @@ struct compose_node {
             uint32_t _pad:31;
             bool is_leaf:1;
             /* Offset into xkb_compose_table::nodes or 0. */
-            uint16_t eqkid;
+            uint32_t eqkid;
         } internal;
         struct {
             /* Offset into xkb_compose_table::utf8. */
@@ -116,6 +118,13 @@ struct xkb_compose_table {
 
     darray_char utf8;
     darray(struct compose_node) nodes;
+};
+
+struct xkb_compose_table_entry {
+    xkb_keysym_t *sequence;
+    size_t sequence_length;
+    xkb_keysym_t keysym;
+    const char *utf8;
 };
 
 #endif

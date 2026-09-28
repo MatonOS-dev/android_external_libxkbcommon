@@ -26,7 +26,9 @@
 
 #include "config.h"
 
-#include "keymap.h"
+#include <assert.h>
+
+#include "keysym.h"
 #include "text.h"
 
 bool
@@ -216,6 +218,9 @@ ModIndexText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
     if (ndx == XKB_MOD_INVALID)
         return "none";
 
+    if (ndx == XKB_MOD_NONE)
+        return "None";
+
     if (ndx >= mods->num_mods)
         return NULL;
 
@@ -232,8 +237,8 @@ ActionTypeText(enum xkb_action_type type)
 const char *
 KeysymText(struct xkb_context *ctx, xkb_keysym_t sym)
 {
-    char *buffer = xkb_context_get_buffer(ctx, 64);
-    xkb_keysym_get_name(sym, buffer, 64);
+    char *buffer = xkb_context_get_buffer(ctx, XKB_KEYSYM_NAME_MAX_SIZE);
+    xkb_keysym_get_name(sym, buffer, XKB_KEYSYM_NAME_MAX_SIZE);
     return buffer;
 }
 
@@ -259,7 +264,6 @@ ModMaskText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
 {
     char buf[1024] = {0};
     size_t pos = 0;
-    xkb_mod_index_t i;
     const struct xkb_mod *mod;
 
     if (mask == 0)
@@ -268,22 +272,29 @@ ModMaskText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
     if (mask == MOD_REAL_MASK_ALL)
         return "all";
 
-    xkb_mods_enumerate(i, mod, mods) {
-        int ret;
-
-        if (!(mask & (1u << i)))
-            continue;
-
-        ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
-                       pos == 0 ? "" : "+",
-                       xkb_atom_text(ctx, mod->name));
-        if (ret <= 0 || pos + ret >= sizeof(buf))
-            break;
-        else
-            pos += ret;
+    if (unlikely(mask & ~((UINT64_C(1) << mods->num_mods) - 1))) {
+        /* If we get a mask that cannot be expressed with the known modifiers,
+         * print it as hexadecimal */
+        const int ret = snprintf(buf, sizeof(buf), "0x%"PRIx32, mask);
+        static_assert(sizeof(mask) == 4 && sizeof(buf) >= sizeof("0xffffffff"),
+                      "Buffer too small");
+        assert(ret >= 0 && (size_t) ret < sizeof(buf));
+        pos = (size_t) ret;
+    } else {
+        /* Print known mods */
+        xkb_mods_mask_foreach(mask, mod, mods) {
+            int ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
+                               pos == 0 ? "" : "+",
+                               xkb_atom_text(ctx, mod->name));
+            if (ret <= 0 || pos + ret >= sizeof(buf))
+                break;
+            else
+                pos += ret;
+        }
     }
+    pos++;
 
-    return strcpy(xkb_context_get_buffer(ctx, pos + 1), buf);
+    return memcpy(xkb_context_get_buffer(ctx, pos), buf, pos);
 }
 
 const char *
@@ -311,8 +322,9 @@ LedStateMaskText(struct xkb_context *ctx, enum xkb_state_component mask)
         else
             pos += ret;
     }
+    pos++;
 
-    return strcpy(xkb_context_get_buffer(ctx, pos + 1), buf);
+    return memcpy(xkb_context_get_buffer(ctx, pos), buf, pos);
 }
 
 const char *
@@ -343,6 +355,7 @@ ControlMaskText(struct xkb_context *ctx, enum xkb_action_controls mask)
         else
             pos += ret;
     }
+    pos++;
 
-    return strcpy(xkb_context_get_buffer(ctx, pos + 1), buf);
+    return memcpy(xkb_context_get_buffer(ctx, pos), buf, pos);
 }

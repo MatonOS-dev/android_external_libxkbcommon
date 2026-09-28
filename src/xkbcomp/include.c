@@ -166,7 +166,7 @@ ParseIncludeMap(char **str_inout, char **file_rtrn, char **map_rtrn,
     /* Set up the next file for the next call, if any. */
     if (*nextop_rtrn == '\0')
         *str_inout = NULL;
-    else if (*nextop_rtrn == '|' || *nextop_rtrn == '+')
+    else if (is_merge_mode_prefix(*nextop_rtrn))
         *str_inout = next;
     else
         return false;
@@ -201,21 +201,26 @@ LogIncludePaths(struct xkb_context *ctx)
     unsigned int i;
 
     if (xkb_context_num_include_paths(ctx) > 0) {
-        log_err(ctx, "%d include paths searched:\n",
+        log_err(ctx, XKB_ERROR_INCLUDED_FILE_NOT_FOUND,
+                "%d include paths searched:\n",
                 xkb_context_num_include_paths(ctx));
         for (i = 0; i < xkb_context_num_include_paths(ctx); i++)
-            log_err(ctx, "\t%s\n",
+            log_err(ctx, XKB_ERROR_INCLUDED_FILE_NOT_FOUND,
+                    "\t%s\n",
                     xkb_context_include_path_get(ctx, i));
     }
     else {
-        log_err(ctx, "There are no include paths to search\n");
+        log_err(ctx, XKB_ERROR_INCLUDED_FILE_NOT_FOUND,
+                "There are no include paths to search\n");
     }
 
     if (xkb_context_num_failed_include_paths(ctx) > 0) {
-        log_err(ctx, "%d include paths could not be added:\n",
+        log_err(ctx, XKB_ERROR_INCLUDED_FILE_NOT_FOUND,
+                "%d include paths could not be added:\n",
                 xkb_context_num_failed_include_paths(ctx));
         for (i = 0; i < xkb_context_num_failed_include_paths(ctx); i++)
-            log_err(ctx, "\t%s\n",
+            log_err(ctx, XKB_ERROR_INCLUDED_FILE_NOT_FOUND,
+                    "\t%s\n",
                     xkb_context_failed_include_path_get(ctx, i));
     }
 }
@@ -237,26 +242,27 @@ FindFileInXkbPath(struct xkb_context *ctx, const char *name,
 {
     unsigned int i;
     FILE *file = NULL;
-    char *buf = NULL;
+    char buf[PATH_MAX];
     const char *typeDir;
 
     typeDir = DirectoryForInclude(type);
 
     for (i = *offset; i < xkb_context_num_include_paths(ctx); i++) {
-        buf = asprintf_safe("%s/%s/%s", xkb_context_include_path_get(ctx, i),
-                            typeDir, name);
-        if (!buf) {
-            log_err(ctx, "Failed to alloc buffer for (%s/%s/%s)\n",
-                    xkb_context_include_path_get(ctx, i), typeDir, name);
+        if (!snprintf_safe(buf, sizeof(buf), "%s/%s/%s",
+                           xkb_context_include_path_get(ctx, i),
+                           typeDir, name)) {
+            log_err(ctx, XKB_ERROR_INVALID_PATH,
+                    "Path is too long: expected max length of %zu, "
+                    "got: %s/%s/%s\n",
+                    sizeof(buf), xkb_context_include_path_get(ctx, i),
+                    typeDir, name);
             continue;
         }
 
         file = fopen(buf, "rb");
         if (file) {
-            if (pathRtrn) {
-                *pathRtrn = buf;
-                buf = NULL;
-            }
+            if (pathRtrn)
+                *pathRtrn = strdup(buf);
             *offset = i;
             goto out;
         }
@@ -264,14 +270,27 @@ FindFileInXkbPath(struct xkb_context *ctx, const char *name,
 
     /* We only print warnings if we can't find the file on the first lookup */
     if (*offset == 0) {
-        log_err(ctx, "Couldn't find file \"%s/%s\" in include paths\n",
+        log_err(ctx, XKB_ERROR_INCLUDED_FILE_NOT_FOUND,
+                "Couldn't find file \"%s/%s\" in include paths\n",
                 typeDir, name);
         LogIncludePaths(ctx);
     }
 
 out:
-    free(buf);
     return file;
+}
+
+bool
+ExceedsIncludeMaxDepth(struct xkb_context *ctx, unsigned int include_depth)
+{
+    if (include_depth >= INCLUDE_MAX_DEPTH) {
+        log_err(ctx, XKB_ERROR_RECURSIVE_INCLUDE,
+                "Exceeded include depth threshold (%d)",
+                INCLUDE_MAX_DEPTH);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 XkbFile *
@@ -292,7 +311,7 @@ ProcessIncludeFile(struct xkb_context *ctx, IncludeStmt *stmt,
 
         if (xkb_file) {
             if (xkb_file->file_type != file_type) {
-                log_err(ctx,
+                log_err(ctx, XKB_ERROR_INVALID_INCLUDED_FILE,
                         "Include file of wrong type (expected %s, got %s); "
                         "Include file \"%s\" ignored\n",
                         xkb_file_type_to_string(file_type),
@@ -310,14 +329,14 @@ ProcessIncludeFile(struct xkb_context *ctx, IncludeStmt *stmt,
 
     if (!xkb_file) {
         if (stmt->map)
-            log_err(ctx, "Couldn't process include statement for '%s(%s)'\n",
+            log_err(ctx, XKB_ERROR_INVALID_INCLUDED_FILE,
+                    "Couldn't process include statement for '%s(%s)'\n",
                     stmt->file, stmt->map);
         else
-            log_err(ctx, "Couldn't process include statement for '%s'\n",
+            log_err(ctx, XKB_ERROR_INVALID_INCLUDED_FILE,
+                    "Couldn't process include statement for '%s'\n",
                     stmt->file);
     }
-
-    /* FIXME: we have to check recursive includes here (or somewhere) */
 
     return xkb_file;
 }

@@ -40,6 +40,9 @@
 #include "xkbcommon/xkbcommon.h"
 #include "utils.h"
 #include "utf8.h"
+#include "keysym.h"
+
+#define NO_KEYSYM_UNICODE_CONVERSION 0
 
 /* We don't use the uint32_t types here, to save some space. */
 struct codepair {
@@ -819,22 +822,9 @@ static const struct codepair keysymtab[] = {
     { 0x0ef9, 0x11f0 }, /*  Hangul_J_KkogjiDalrinIeung ᇰ HANGUL JONGSEONG YESIEUNG */
     { 0x0efa, 0x11f9 }, /*        Hangul_J_YeorinHieuh ᇹ HANGUL JONGSEONG YEORINHIEUH */
     { 0x0eff, 0x20a9 }, /*                  Korean_Won ₩ WON SIGN */
-    { 0x13a4, 0x20ac }, /*                        Euro € EURO SIGN */
     { 0x13bc, 0x0152 }, /*                          OE Œ LATIN CAPITAL LIGATURE OE */
     { 0x13bd, 0x0153 }, /*                          oe œ LATIN SMALL LIGATURE OE */
     { 0x13be, 0x0178 }, /*                  Ydiaeresis Ÿ LATIN CAPITAL LETTER Y WITH DIAERESIS */
-    { 0x20a0, 0x20a0 }, /*                     EcuSign ₠ EURO-CURRENCY SIGN */
-    { 0x20a1, 0x20a1 }, /*                   ColonSign ₡ COLON SIGN */
-    { 0x20a2, 0x20a2 }, /*                CruzeiroSign ₢ CRUZEIRO SIGN */
-    { 0x20a3, 0x20a3 }, /*                  FFrancSign ₣ FRENCH FRANC SIGN */
-    { 0x20a4, 0x20a4 }, /*                    LiraSign ₤ LIRA SIGN */
-    { 0x20a5, 0x20a5 }, /*                    MillSign ₥ MILL SIGN */
-    { 0x20a6, 0x20a6 }, /*                   NairaSign ₦ NAIRA SIGN */
-    { 0x20a7, 0x20a7 }, /*                  PesetaSign ₧ PESETA SIGN */
-    { 0x20a8, 0x20a8 }, /*                   RupeeSign ₨ RUPEE SIGN */
-    { 0x20a9, 0x20a9 }, /*                     WonSign ₩ WON SIGN */
-    { 0x20aa, 0x20aa }, /*               NewSheqelSign ₪ NEW SHEQEL SIGN */
-    { 0x20ab, 0x20ab }, /*                    DongSign ₫ DONG SIGN */
     { 0x20ac, 0x20ac }, /*                    EuroSign € EURO SIGN */
 };
 
@@ -860,7 +850,7 @@ bin_search(const struct codepair *table, size_t length, xkb_keysym_t keysym)
     }
 
     /* no matching Unicode value found in table */
-    return 0;
+    return NO_KEYSYM_UNICODE_CONVERSION;
 }
 
 XKB_EXPORT uint32_t
@@ -884,14 +874,21 @@ xkb_keysym_to_utf32(xkb_keysym_t keysym)
         return keysym & 0x7f;
 
     /* also check for directly encoded Unicode codepoints */
+
+    /* Exclude surrogates: they are invalid in UTF-32.
+     * See https://www.unicode.org/versions/Unicode15.0.0/ch03.pdf#G28875
+     * for further details.
+    */
+    if (0x0100d800 <= keysym && keysym <= 0x0100dfff)
+        return NO_KEYSYM_UNICODE_CONVERSION;
     /*
      * In theory, this is supposed to start from 0x100100, such that the ASCII
      * range, which is already covered by 0x00-0xff, can't be encoded in two
      * ways. However, changing this after a couple of decades probably won't
      * go well, so it stays as it is.
      */
-    if (0x01000000 <= keysym && keysym <= 0x0110ffff)
-        return keysym - 0x01000000;
+    if (XKB_KEYSYM_UNICODE_OFFSET <= keysym && keysym <= XKB_KEYSYM_UNICODE_MAX)
+        return keysym - XKB_KEYSYM_UNICODE_OFFSET;
 
     /* search main table */
     return bin_search(keysymtab, ARRAY_SIZE(keysymtab) - 1, keysym);
@@ -913,7 +910,8 @@ xkb_utf32_to_keysym(uint32_t ucs)
         return XKB_KEY_Delete;
 
     /* Unicode non-symbols and code points outside Unicode planes */
-    if ((ucs >= 0xfdd0 && ucs <= 0xfdef) ||
+    if ((ucs >= 0xd800 && ucs <= 0xdfff) ||
+        (ucs >= 0xfdd0 && ucs <= 0xfdef) ||
         ucs > 0x10ffff || (ucs & 0xfffe) == 0xfffe)
         return XKB_KEY_NoSymbol;
 
@@ -923,7 +921,7 @@ xkb_utf32_to_keysym(uint32_t ucs)
             return keysymtab[i].keysym;
 
     /* Use direct encoding if everything else fails */
-    return ucs | 0x01000000;
+    return ucs | XKB_KEYSYM_UNICODE_OFFSET;
 }
 
 /*
@@ -956,12 +954,14 @@ xkb_keysym_to_utf8(xkb_keysym_t keysym, char *buffer, size_t size)
 {
     uint32_t codepoint;
 
-    if (size < 7)
+    /* Unicode code point takes up to 4 bytes in UTF-8, plus the
+     * NULL-terminating byte. */
+    if (size < XKB_KEYSYM_UTF8_MAX_SIZE)
         return -1;
 
     codepoint = xkb_keysym_to_utf32(keysym);
 
-    if (codepoint == 0)
+    if (codepoint == NO_KEYSYM_UNICODE_CONVERSION)
         return 0;
 
     return utf32_to_utf8(codepoint, buffer);

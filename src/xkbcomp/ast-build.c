@@ -184,6 +184,12 @@ ExprCreateArrayRef(xkb_atom_t element, xkb_atom_t field, ExprDef *entry)
 }
 
 ExprDef *
+ExprEmptyList(void)
+{
+    return ExprCreate(EXPR_EMPTY_LIST, EXPR_TYPE_UNKNOWN, sizeof(ExprCommon));
+}
+
+ExprDef *
 ExprCreateAction(xkb_atom_t name, ExprDef *args)
 {
     ExprDef *expr = ExprCreate(EXPR_ACTION_DECL, EXPR_TYPE_UNKNOWN, sizeof(ExprAction));
@@ -210,55 +216,23 @@ ExprCreateKeysymList(xkb_keysym_t sym)
     ExprDef *expr = ExprCreate(EXPR_KEYSYM_LIST, EXPR_TYPE_SYMBOLS, sizeof(ExprKeysymList));
     if (!expr)
         return NULL;
-
     darray_init(expr->keysym_list.syms);
-    darray_init(expr->keysym_list.symsMapIndex);
-    darray_init(expr->keysym_list.symsNumEntries);
-
-    darray_append(expr->keysym_list.syms, sym);
-    darray_append(expr->keysym_list.symsMapIndex, 0);
-    darray_append(expr->keysym_list.symsNumEntries, 1);
-
-    return expr;
-}
-
-ExprDef *
-ExprCreateMultiKeysymList(ExprDef *expr)
-{
-    unsigned nLevels = darray_size(expr->keysym_list.symsMapIndex);
-
-    darray_resize(expr->keysym_list.symsMapIndex, 1);
-    darray_resize(expr->keysym_list.symsNumEntries, 1);
-    darray_item(expr->keysym_list.symsMapIndex, 0) = 0;
-    darray_item(expr->keysym_list.symsNumEntries, 0) = nLevels;
-
+    if (sym == XKB_KEY_NoSymbol) {
+        /* Discard NoSymbol */
+    } else {
+        darray_append(expr->keysym_list.syms, sym);
+    }
     return expr;
 }
 
 ExprDef *
 ExprAppendKeysymList(ExprDef *expr, xkb_keysym_t sym)
 {
-    unsigned nSyms = darray_size(expr->keysym_list.syms);
-
-    darray_append(expr->keysym_list.symsMapIndex, nSyms);
-    darray_append(expr->keysym_list.symsNumEntries, 1);
-    darray_append(expr->keysym_list.syms, sym);
-
-    return expr;
-}
-
-ExprDef *
-ExprAppendMultiKeysymList(ExprDef *expr, ExprDef *append)
-{
-    unsigned nSyms = darray_size(expr->keysym_list.syms);
-    unsigned numEntries = darray_size(append->keysym_list.syms);
-
-    darray_append(expr->keysym_list.symsMapIndex, nSyms);
-    darray_append(expr->keysym_list.symsNumEntries, numEntries);
-    darray_concat(expr->keysym_list.syms, append->keysym_list.syms);
-
-    FreeStmt((ParseCommon *) append);
-
+    if (sym == XKB_KEY_NoSymbol) {
+        /* Discard NoSymbol */
+    } else {
+        darray_append(expr->keysym_list.syms, sym);
+    }
     return expr;
 }
 
@@ -511,7 +485,7 @@ IncludeCreate(struct xkb_context *ctx, char *str, enum merge_mode merge)
         incl->modifier = extra_data;
         incl->next_incl = NULL;
 
-        if (nextop == '|')
+        if (nextop == MERGE_AUGMENT_PREFIX)
             merge = MERGE_AUGMENT;
         else
             merge = MERGE_OVERRIDE;
@@ -525,7 +499,8 @@ IncludeCreate(struct xkb_context *ctx, char *str, enum merge_mode merge)
     return first;
 
 err:
-    log_err(ctx, "Illegal include statement \"%s\"; Ignored\n", stmt);
+    log_err(ctx, XKB_ERROR_INVALID_INCLUDE_STATEMENT,
+            "Illegal include statement \"%s\"; Ignored\n", stmt);
     FreeInclude(first);
     free(stmt);
     return NULL;
@@ -628,8 +603,6 @@ FreeExpr(ExprDef *expr)
 
     case EXPR_KEYSYM_LIST:
         darray_free(expr->keysym_list.syms);
-        darray_free(expr->keysym_list.symsMapIndex);
-        darray_free(expr->keysym_list.symsNumEntries);
         break;
 
     default:
@@ -793,6 +766,7 @@ static const char *expr_op_type_strings[_EXPR_NUM_VALUES] = {
     [EXPR_ACTION_DECL] = "action declaration",
     [EXPR_FIELD_REF] = "field reference",
     [EXPR_ARRAY_REF] = "array reference",
+    [EXPR_EMPTY_LIST] = "empty list",
     [EXPR_KEYSYM_LIST] = "list of keysyms",
     [EXPR_ACTION_LIST] = "list of actions",
     [EXPR_ADD] = "addition",

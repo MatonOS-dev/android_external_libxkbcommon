@@ -26,6 +26,7 @@
 
 #include "config.h"
 
+#include "xkbcommon/xkbcommon-names.h"
 #include "keymap.h"
 
 static void
@@ -33,14 +34,14 @@ update_builtin_keymap_fields(struct xkb_keymap *keymap)
 {
     /* Predefined (AKA real, core, X11) modifiers. The order is important! */
     static const char *const builtin_mods[] = {
-        [0] = "Shift",
-        [1] = "Lock",
-        [2] = "Control",
-        [3] = "Mod1",
-        [4] = "Mod2",
-        [5] = "Mod3",
-        [6] = "Mod4",
-        [7] = "Mod5"
+        [0] = XKB_MOD_NAME_SHIFT,
+        [1] = XKB_MOD_NAME_CAPS,
+        [2] = XKB_MOD_NAME_CTRL,
+        [3] = XKB_MOD_NAME_MOD1,
+        [4] = XKB_MOD_NAME_MOD2,
+        [5] = XKB_MOD_NAME_MOD3,
+        [6] = XKB_MOD_NAME_MOD4,
+        [7] = XKB_MOD_NAME_MOD5
     };
 
     for (unsigned i = 0; i < ARRAY_SIZE(builtin_mods); i++) {
@@ -121,7 +122,7 @@ XkbEscapeMapName(char *name)
 
     while (*name) {
         unsigned char c = *name;
-        if (!(legal[c / 8] & (1 << (c % 8))))
+        if (!(legal[c / 8] & (1u << (c % 8))))
             *name = '_';
         name++;
     }
@@ -147,6 +148,90 @@ XkbLevelsSameSyms(const struct xkb_level *a, const struct xkb_level *b)
     if (a->num_syms != b->num_syms)
         return false;
     if (a->num_syms <= 1)
-        return a->u.sym == b->u.sym;
-    return memcmp(a->u.syms, b->u.syms, sizeof(*a->u.syms) * a->num_syms) == 0;
+        return a->s.sym == b->s.sym;
+    return memcmp(a->s.syms, b->s.syms, sizeof(*a->s.syms) * a->num_syms) == 0;
+}
+
+bool
+XkbLevelsSameActions(const struct xkb_level *a, const struct xkb_level *b)
+{
+    if (a->num_actions != b->num_actions)
+        return false;
+    if (a->num_actions <= 1)
+        return memcmp(&a->a.action, &b->a.action, sizeof(a->a.action)) == 0;
+    return memcmp(a->a.actions, b->a.actions, sizeof(*a->a.actions) * a->num_actions) == 0;
+}
+
+xkb_layout_index_t
+XkbWrapGroupIntoRange(int32_t group,
+                      xkb_layout_index_t num_groups,
+                      enum xkb_range_exceed_type out_of_range_group_action,
+                      xkb_layout_index_t out_of_range_group_number)
+{
+    if (num_groups == 0)
+        return XKB_LAYOUT_INVALID;
+
+    if (group >= 0 && (xkb_layout_index_t) group < num_groups)
+        return group;
+
+    switch (out_of_range_group_action) {
+    case RANGE_REDIRECT:
+        if (out_of_range_group_number >= num_groups)
+            return 0;
+        return out_of_range_group_number;
+
+    case RANGE_SATURATE:
+        if (group < 0)
+            return 0;
+        else
+            return num_groups - 1;
+
+    case RANGE_WRAP:
+    default:
+        /*
+         * C99 says a negative dividend in a modulo operation always
+         * gives a negative result.
+         */
+        if (group < 0)
+            return ((int) num_groups + (group % (int) num_groups));
+        else
+            return group % num_groups;
+    }
+}
+
+unsigned int
+xkb_keymap_key_get_actions_by_level(struct xkb_keymap *keymap,
+                                    xkb_keycode_t kc,
+                                    xkb_layout_index_t layout,
+                                    xkb_level_index_t level,
+                                    const union xkb_action **actions)
+{
+    const struct xkb_key *key = XkbKey(keymap, kc);
+    if (!key)
+        goto err;
+
+    layout = XkbWrapGroupIntoRange((int32_t) layout, key->num_groups,
+                                   key->out_of_range_group_action,
+                                   key->out_of_range_group_number);
+    if (layout == XKB_LAYOUT_INVALID)
+        goto err;
+
+    if (level >= XkbKeyNumLevels(key, layout))
+        goto err;
+
+    const unsigned int count = key->groups[layout].levels[level].num_actions;
+    switch (count) {
+        case 0:
+            goto err;
+        case 1:
+            *actions = &key->groups[layout].levels[level].a.action;
+            break;
+        default:
+            *actions = key->groups[layout].levels[level].a.actions;
+    }
+    return count;
+
+err:
+    *actions = NULL;
+    return 0;
 }

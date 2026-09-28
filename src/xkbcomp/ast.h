@@ -50,6 +50,11 @@
 #ifndef XKBCOMP_AST_H
 #define XKBCOMP_AST_H
 
+#include "xkbcommon/xkbcommon.h"
+
+#include "atom.h"
+#include "darray.h"
+
 enum xkb_file_type {
     /* Component files, by order of compilation. */
     FILE_TYPE_KEYCODES = 0,
@@ -111,6 +116,8 @@ enum expr_op_type {
     EXPR_ACTION_DECL,
     EXPR_FIELD_REF,
     EXPR_ARRAY_REF,
+    /* Needed because of the ambiguity between keysym and action empty lists */
+    EXPR_EMPTY_LIST,
     EXPR_KEYSYM_LIST,
     EXPR_ACTION_LIST,
     EXPR_ADD,
@@ -231,14 +238,14 @@ typedef struct {
 
 typedef struct {
     ExprCommon expr;
+    /* List of actions for a single level. */
     ExprDef *actions;
 } ExprActionList;
 
 typedef struct {
     ExprCommon expr;
+    /* List of keysym for a single level. */
     darray(xkb_keysym_t) syms;
-    darray(unsigned int) symsMapIndex;
-    darray(unsigned int) symsNumEntries;
 } ExprKeysymList;
 
 union ExprDef {
@@ -303,6 +310,7 @@ typedef struct {
 typedef struct {
     ParseCommon common;
     enum merge_mode merge;
+    // NOTE: Can also be “None”, rather than a modifier name.
     xkb_atom_t modifier;
     ExprDef *keys;
 } ModMapDef;

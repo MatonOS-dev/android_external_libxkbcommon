@@ -39,7 +39,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#ifdef _MSC_VER
+#ifdef _WIN32
 #include <io.h>
 #include <windows.h>
 #else
@@ -48,19 +48,119 @@
 #endif
 
 #include "tools-common.h"
+#include "src/utils.h"
+#include "src/keysym.h"
+#include "src/compose/parser.h"
+
+static void
+print_keycode(struct xkb_keymap *keymap, const char* prefix,
+              xkb_keycode_t keycode, const char *suffix) {
+    const char *keyname = xkb_keymap_key_get_name(keymap, keycode);
+    if (keyname) {
+        printf("%s%-4s%s", prefix, keyname, suffix);
+    } else {
+        printf("%s%-4d%s", prefix, keycode, suffix);
+    }
+}
+
+#ifdef ENABLE_PRIVATE_APIS
+#include "src/keymap.h"
 
 void
-tools_print_keycode_state(struct xkb_state *state,
+print_keymap_modmaps(struct xkb_keymap *keymap) {
+    printf("Modifiers mapping:\n");
+    for (xkb_mod_index_t vmod = 0; vmod < xkb_keymap_num_mods(keymap); vmod++) {
+        if (keymap->mods.mods[vmod].type & MOD_REAL)
+            continue;
+        printf("- %s: ", xkb_keymap_mod_get_name(keymap, vmod));
+        if (keymap->mods.mods[vmod].mapping) {
+            bool first = true;
+            for (xkb_mod_index_t mod = 0; mod < xkb_keymap_num_mods(keymap); mod++) {
+                if (keymap->mods.mods[vmod].mapping & (UINT32_C(1) << mod)) {
+                    if (first) {
+                        first = false;
+                        printf("%s", xkb_keymap_mod_get_name(keymap, mod));
+                    } else {
+                        printf("+ %s", xkb_keymap_mod_get_name(keymap, mod));
+                    }
+                }
+            }
+        } else {
+            printf("(unmapped)");
+        }
+        printf("\n");
+    }
+}
+
+#define MODMAP_PADDING  7
+#define VMODMAP_PADDING 9
+static void
+print_key_modmaps(struct xkb_keymap *keymap, xkb_keycode_t keycode) {
+    const struct xkb_key *key = XkbKey(keymap, keycode);
+    if (key != NULL) {
+        xkb_mod_index_t mod;
+
+        printf("modmap [ ");
+        if (key->modmap) {
+            for (mod = 0; mod < xkb_keymap_num_mods(keymap); mod++) {
+                if (key->modmap & (UINT32_C(1) << mod)) {
+                    printf("%-*s", (int) MODMAP_PADDING,
+                           xkb_keymap_mod_get_name(keymap, mod));
+                    break;
+                }
+            }
+        } else {
+            printf("%*c", (int) MODMAP_PADDING, ' ');
+        }
+
+        printf(" ] vmodmap [ ");
+        int length = 0;
+        const char *mod_name;
+        for (mod = 0; mod < xkb_keymap_num_mods(keymap); mod++) {
+            if (key->vmodmap & (UINT32_C(1) << mod)) {
+                mod_name = xkb_keymap_mod_get_name(keymap, mod);
+                length += strlen(mod_name) + 1;
+                printf("%s ", mod_name);
+            }
+        }
+        if (length < VMODMAP_PADDING) {
+            printf("%*c", (int) VMODMAP_PADDING - length, ' ');
+        }
+        printf("] ");
+    }
+}
+
+void
+print_keys_modmaps(struct xkb_keymap *keymap) {
+    const struct xkb_key *key;
+    printf("Keys modmaps:\n");
+    xkb_keys_foreach(key, keymap) {
+        if (key->modmap || key->vmodmap) {
+            print_keycode(keymap, "- ", key->keycode, ": ");
+            print_key_modmaps(keymap, key->keycode);
+            putchar('\n');
+        }
+    }
+}
+#endif
+
+void
+tools_print_keycode_state(const char *prefix,
+                          struct xkb_state *state,
                           struct xkb_compose_state *compose_state,
                           xkb_keycode_t keycode,
-                          enum xkb_consumed_mode consumed_mode)
+                          enum xkb_consumed_mode consumed_mode,
+                          print_state_fields_mask_t fields)
 {
     struct xkb_keymap *keymap;
 
     xkb_keysym_t sym;
     const xkb_keysym_t *syms;
     int nsyms;
-    char s[16];
+#define BUFFER_SIZE MAX(XKB_COMPOSE_MAX_STRING_SIZE, XKB_KEYSYM_NAME_MAX_SIZE)
+    assert(XKB_KEYSYM_UTF8_MAX_SIZE <= BUFFER_SIZE);
+    char s[BUFFER_SIZE];
+#undef BUFFER_SIZE
     xkb_layout_index_t layout;
     enum xkb_compose_status status;
 
@@ -88,22 +188,47 @@ tools_print_keycode_state(struct xkb_state *state,
         syms = &sym;
     }
 
+    if (prefix)
+        printf("%s", prefix);
+
+    print_keycode(keymap, "keycode [ ", keycode, " ] ");
+
+#ifdef ENABLE_PRIVATE_APIS
+    if (fields & PRINT_MODMAPS) {
+        print_key_modmaps(keymap, keycode);
+    }
+#endif
+
     printf("keysyms [ ");
     for (int i = 0; i < nsyms; i++) {
         xkb_keysym_get_name(syms[i], s, sizeof(s));
-        printf("%-*s ", (int) sizeof(s), s);
+        printf("%-*s ", XKB_KEYSYM_NAME_MAX_SIZE, s);
     }
     printf("] ");
 
-    if (status == XKB_COMPOSE_COMPOSED)
-        xkb_compose_state_get_utf8(compose_state, s, sizeof(s));
-    else
-        xkb_state_key_get_utf8(state, keycode, s, sizeof(s));
-    printf("unicode [ %s ] ", s);
+    if (fields & PRINT_UNICODE) {
+        if (status == XKB_COMPOSE_COMPOSED)
+            xkb_compose_state_get_utf8(compose_state, s, sizeof(s));
+        else
+            xkb_state_key_get_utf8(state, keycode, s, sizeof(s));
+        /* HACK: escape single control characters from C0 set using the
+        * Unicode codepoint convention. Ideally we would like to escape
+        * any non-printable character in the string.
+        */
+        if (!*s) {
+            printf("unicode [   ] ");
+        } else if (strlen(s) == 1 && (*s <= 0x1F || *s == 0x7F)) {
+            printf("unicode [ U+%04hX ] ", *s);
+        } else {
+            printf("unicode [ %s ] ", s);
+        }
+    }
 
     layout = xkb_state_key_get_layout(state, keycode);
-    printf("layout [ %s (%d) ] ",
-           xkb_keymap_layout_get_name(keymap, layout), layout);
+    if (fields & PRINT_LAYOUT) {
+        printf("layout [ %s (%d) ] ",
+               xkb_keymap_layout_get_name(keymap, layout), layout);
+    }
 
     printf("level [ %d ] ",
            xkb_state_key_get_level(state, keycode, layout));
@@ -160,7 +285,7 @@ tools_print_state_changes(enum xkb_state_component changed)
     printf("]\n");
 }
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 void
 tools_disable_stdin_echo(void)
 {
@@ -239,4 +364,48 @@ tools_exec_command(const char *prefix, int real_argc, char **real_argv)
     }
 
     return EXIT_FAILURE;
+}
+
+bool
+is_pipe_or_regular_file(int fd)
+{
+    struct stat info;
+    if (fstat(fd, &info) == 0) {
+        return S_ISFIFO(info.st_mode) || S_ISREG(info.st_mode);
+    } else {
+        return false;
+    }
+}
+
+FILE*
+tools_read_stdin(void)
+{
+    FILE *file = tmpfile();
+    if (!file) {
+        fprintf(stderr, "Failed to create tmpfile\n");
+        return NULL;
+    }
+
+    while (true) {
+        char buf[4096] = {0};
+        const size_t len = fread(buf, 1, sizeof(buf), stdin);
+        if (ferror(stdin)) {
+            fprintf(stderr, "Failed to read from stdin\n");
+            goto err;
+        }
+        if (len > 0) {
+            size_t wlen = fwrite(buf, 1, len, file);
+            if (wlen != len) {
+                fprintf(stderr, "Failed to write to tmpfile\n");
+                goto err;
+            }
+        }
+        if (feof(stdin))
+            break;
+    }
+    fseek(file, 0, SEEK_SET);
+    return file;
+err:
+    fclose(file);
+    return NULL;
 }

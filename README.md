@@ -1,21 +1,26 @@
 # libxkbcommon
 
 libxkbcommon is a keyboard keymap compiler and support library which
-processes a reduced subset of keymaps as defined by the XKB (X Keyboard
+processes a reduced subset of keymaps as defined by the [XKB] \(X Keyboard
 Extension) specification.  It also contains a module for handling Compose
 and dead keys and a separate library for listing available keyboard layouts.
 
+[XKB]: doc/introduction-to-xkb.md
+
 ## Quick Guide
 
-See [Quick Guide](doc/quick-guide.md).
+- [Introduction to XKB][XKB]: to learn the essentials of XKB.
+- [User-configuration](doc/user-configuration.md): instructions to add
+  a *custom layout* or option.
+- [Quick Guide](doc/quick-guide.md): introduction on how to use this library.
 
 ## Building
 
 libxkbcommon is built with [Meson](http://mesonbuild.com/):
 
     meson setup build
-    ninja -C build
-    ninja -C build test  # Run the tests.
+    meson compile -C build
+    meson test -C build # Run the tests.
 
 To build for use with Wayland, you can disable X11 support while still
 using the X11 keyboard configuration resource files thusly:
@@ -24,12 +29,12 @@ using the X11 keyboard configuration resource files thusly:
         -Denable-x11=false \
         -Dxkb-config-root=/usr/share/X11/xkb \
         -Dx-locale-root=/usr/share/X11/locale
-    ninja -C build
+    meson compile -C build
 
 ## API
 
 While libxkbcommon's API is somewhat derived from the classic XKB API as found
-in X11/extensions/XKB.h and friends, it has been substantially reworked to
+in `X11/extensions/XKB.h` and friends, it has been substantially reworked to
 expose fewer internal details to clients.
 
 See the [API Documentation](https://xkbcommon.org/doc/current/modules.html).
@@ -47,7 +52,7 @@ data.
 
 ## Relation to X11
 
-See [Compatibility](doc/compat.md) notes.
+See [Compatibility](doc/compatibility.md) notes.
 
 ## Development
 

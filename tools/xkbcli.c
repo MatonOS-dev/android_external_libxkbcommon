@@ -37,6 +37,9 @@ usage(void)
            "Global options:\n"
            "  -h, --help ...... show this help and exit\n"
            "  -V, --version ... show version information and exit\n"
+           /* WARNING: The following is parsed by the bash completion script.
+            *          Any change to the format (in particular to the indentation)
+            *          should kept in the script in sync. */
            "Commands:\n"
 #if HAVE_XKBCLI_LIST
            "  list\n"
@@ -58,9 +61,24 @@ usage(void)
            "    Interactive debugger for XKB keymaps for evdev\n"
            "\n"
 #endif
+#if HAVE_XKBCLI_DUMP_KEYMAP_WAYLAND
+           "  dump-keymap-wayland\n"
+           "    Dump a XKB keymap from a Wayland compositor\n"
+           "\n"
+#endif
+#if HAVE_XKBCLI_DUMP_KEYMAP_X11
+           "  dump-keymap-x11\n"
+           "    Dump a XKB keymap from an X server\n"
+           "\n"
+#endif
 #if HAVE_XKBCLI_COMPILE_KEYMAP
            "  compile-keymap\n"
            "    Compile an XKB keymap\n"
+           "\n"
+#endif
+#if HAVE_XKBCLI_COMPILE_COMPOSE
+           "  compile-compose\n"
+           "    Compile a Compose file\n"
            "\n"
 #endif
 #if HAVE_XKBCLI_HOW_TO_TYPE

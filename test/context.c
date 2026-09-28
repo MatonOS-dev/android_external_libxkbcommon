@@ -30,15 +30,6 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
-#ifdef _MSC_VER
-# include <io.h>
-# include <direct.h>
-# ifndef S_ISDIR
-#  define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
-# endif
-#else
-# include <unistd.h>
-#endif
 
 /* keeps a cache of all makedir/maketmpdir directories so we can free and
  * rmdir them in one go, see unmakedirs() */
@@ -82,29 +73,15 @@ static void restore_env(void)
 
 static const char *makedir(const char *parent, const char *path)
 {
-    char *dirname;
-    int err;
-
-    dirname = asprintf_safe("%s/%s", parent, path);
-    assert(dirname);
-    err = mkdir(dirname, 0777);
-    assert(err == 0);
-
+    char *dirname = test_makedir(parent, path);
     dirnames[ndirs++] = dirname;
-
     return dirname;
 }
 
 static const char *maketmpdir(void)
 {
-    const char *template = "/tmp/xkbcommon-test.XXXXXX";
-    char *tmpdir = strdup(template);
-
-    tmpdir = mkdtemp(tmpdir);
-    assert(tmpdir != NULL);
-
+    char *tmpdir = test_maketempdir("xkbcommon-test.XXXXXX");
     dirnames[ndirs++] = tmpdir;
-
     return tmpdir;
 }
 
@@ -128,7 +105,6 @@ test_config_root_include_path(void)
     struct xkb_context *ctx;
     const char *tmpdir;
     const char *context_path;
-    int nincludes;
 
     buffer_env("XKB_CONFIG_ROOT");
     buffer_env("HOME");
@@ -141,7 +117,7 @@ test_config_root_include_path(void)
 
     /* built-in path is last */
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-    nincludes = xkb_context_num_include_paths(ctx);
+    const unsigned int nincludes = xkb_context_num_include_paths(ctx);
     assert(nincludes >= 1);
     context_path = xkb_context_include_path_get(ctx, nincludes - 1);
     assert(strcmp(context_path, tmpdir) == 0);
@@ -157,7 +133,6 @@ test_config_root_include_path_fallback(void)
     struct xkb_context *ctx;
     const char *xkbdir = DFLT_XKB_CONFIG_ROOT;
     const char *context_path;
-    int nincludes;
 
     /* quick and dirty check that the default directory exists.
      * It may not on a vanilla test box if we just run the test
@@ -179,7 +154,7 @@ test_config_root_include_path_fallback(void)
 
     /* built-in path is last */
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-    nincludes = xkb_context_num_include_paths(ctx);
+    const unsigned int nincludes = xkb_context_num_include_paths(ctx);
     assert(nincludes >= 1);
     context_path = xkb_context_include_path_get(ctx, nincludes - 1);
     assert(strcmp(context_path, xkbdir) == 0);
@@ -313,6 +288,8 @@ test_include_order(void)
 int
 main(void)
 {
+    test_init();
+
     struct xkb_context *context = test_get_context(0);
     xkb_atom_t atom;
 

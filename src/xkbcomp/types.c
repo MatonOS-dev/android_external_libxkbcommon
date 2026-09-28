@@ -31,6 +31,7 @@
 #include "vmod.h"
 #include "expr.h"
 #include "include.h"
+#include "util-mem.h"
 
 enum type_field {
     TYPE_FIELD_MASK = (1 << 0),
@@ -53,6 +54,7 @@ typedef struct {
 typedef struct {
     char *name;
     int errorCount;
+    unsigned int include_depth;
 
     darray(KeyTypeInfo) types;
     struct xkb_mod_set mods;
@@ -89,10 +91,10 @@ ReportTypeShouldBeArray(KeyTypesInfo *info, KeyTypeInfo *type,
 }
 
 static inline bool
-ReportTypeBadType(KeyTypesInfo *info, KeyTypeInfo *type,
-                  const char *field, const char *wanted)
+ReportTypeBadType(KeyTypesInfo *info, xkb_message_code_t code,
+                  KeyTypeInfo *type, const char *field, const char *wanted)
 {
-    return ReportBadType(info->ctx, "key type", field,
+    return ReportBadType(info->ctx, code, "key type", field,
                          TypeTxt(info, type), wanted);
 }
 
@@ -100,10 +102,12 @@ ReportTypeBadType(KeyTypesInfo *info, KeyTypeInfo *type,
 
 static void
 InitKeyTypesInfo(KeyTypesInfo *info, struct xkb_context *ctx,
+                 unsigned int include_depth,
                  const struct xkb_mod_set *mods)
 {
     memset(info, 0, sizeof(*info));
     info->ctx = ctx;
+    info->include_depth = include_depth;
     info->mods = *mods;
 }
 
@@ -118,6 +122,9 @@ static void
 ClearKeyTypesInfo(KeyTypesInfo *info)
 {
     free(info->name);
+    KeyTypeInfo *type;
+    darray_foreach(type, info->types)
+        ClearKeyTypeInfo(type);
     darray_free(info->types);
 }
 
@@ -144,6 +151,7 @@ AddKeyType(KeyTypesInfo *info, KeyTypeInfo *new, bool same_file)
         if (new->merge == MERGE_REPLACE || new->merge == MERGE_OVERRIDE) {
             if ((same_file && verbosity > 0) || verbosity > 9) {
                 log_warn(info->ctx,
+                         XKB_WARNING_CONFLICTING_KEY_TYPE_DEFINITIONS,
                          "Multiple definitions of the %s key type; "
                          "Earlier definition ignored\n",
                          xkb_atom_text(info->ctx, new->name));
@@ -158,6 +166,7 @@ AddKeyType(KeyTypesInfo *info, KeyTypeInfo *new, bool same_file)
 
         if (same_file)
             log_vrb(info->ctx, 4,
+                    XKB_WARNING_CONFLICTING_KEY_TYPE_DEFINITIONS,
                     "Multiple definitions of the %s key type; "
                     "Later definition ignored\n",
                     xkb_atom_text(info->ctx, new->name));
@@ -184,12 +193,12 @@ MergeIncludedKeyTypes(KeyTypesInfo *into, KeyTypesInfo *from,
     into->mods = from->mods;
 
     if (into->name == NULL) {
-        into->name = from->name;
-        from->name = NULL;
+        into->name = steal(&from->name);
     }
 
     if (darray_empty(into->types)) {
         into->types = from->types;
+        /* Types stolen via shallow copy, so reinitialize the array */
         darray_init(from->types);
     }
     else {
@@ -199,6 +208,9 @@ MergeIncludedKeyTypes(KeyTypesInfo *into, KeyTypesInfo *from,
             if (!AddKeyType(into, type, false))
                 into->errorCount++;
         }
+        /* Types were either shallow copied or reinitialized individually
+           in `AddKeyType`, so we only need to free the array */
+        darray_free(from->types);
     }
 }
 
@@ -210,9 +222,13 @@ HandleIncludeKeyTypes(KeyTypesInfo *info, IncludeStmt *include)
 {
     KeyTypesInfo included;
 
-    InitKeyTypesInfo(&included, info->ctx, &info->mods);
-    included.name = include->stmt;
-    include->stmt = NULL;
+    if (ExceedsIncludeMaxDepth(info->ctx, info->include_depth)) {
+        info->errorCount += 10;
+        return false;
+    }
+
+    InitKeyTypesInfo(&included, info->ctx, 0 /* unused */, &info->mods);
+    included.name = steal(&include->stmt);
 
     for (IncludeStmt *stmt = include; stmt; stmt = stmt->next_incl) {
         KeyTypesInfo next_incl;
@@ -225,7 +241,8 @@ HandleIncludeKeyTypes(KeyTypesInfo *info, IncludeStmt *include)
             return false;
         }
 
-        InitKeyTypesInfo(&next_incl, info->ctx, &included.mods);
+        InitKeyTypesInfo(&next_incl, info->ctx, info->include_depth + 1,
+                         &included.mods);
 
         HandleKeyTypesFile(&next_incl, file, stmt->merge);
 
@@ -250,19 +267,19 @@ SetModifiers(KeyTypesInfo *info, KeyTypeInfo *type, ExprDef *arrayNdx,
     xkb_mod_mask_t mods;
 
     if (arrayNdx)
-        log_warn(info->ctx,
+        log_warn(info->ctx, XKB_LOG_MESSAGE_NO_ID,
                  "The modifiers field of a key type is not an array; "
                  "Illegal array subscript ignored\n");
 
     if (!ExprResolveModMask(info->ctx, value, MOD_BOTH, &info->mods, &mods)) {
-        log_err(info->ctx,
+        log_err(info->ctx, XKB_ERROR_UNSUPPORTED_MODIFIER_MASK,
                 "Key type mask field must be a modifier mask; "
                 "Key type definition ignored\n");
         return false;
     }
 
     if (type->defined & TYPE_FIELD_MASK) {
-        log_warn(info->ctx,
+        log_warn(info->ctx, XKB_LOG_MESSAGE_NO_ID,
                  "Multiple modifier mask definitions for key type %s; "
                  "Using %s, ignoring %s\n",
                  xkb_atom_text(info->ctx, type->name),
@@ -298,7 +315,7 @@ AddMapEntry(KeyTypesInfo *info, KeyTypeInfo *type,
     old = FindMatchingMapEntry(type, new->mods.mods);
     if (old) {
         if (report && old->level != new->level) {
-            log_warn(info->ctx,
+            log_warn(info->ctx, XKB_WARNING_CONFLICTING_KEY_TYPE_MAP_ENTRY,
                      "Multiple map entries for %s in %s; "
                      "Using %d, ignoring %d\n",
                      MapEntryTxt(info, new), TypeTxt(info, type),
@@ -306,7 +323,7 @@ AddMapEntry(KeyTypesInfo *info, KeyTypeInfo *type,
                      (clobber ? old->level : new->level) + 1);
         }
         else {
-            log_vrb(info->ctx, 10,
+            log_vrb(info->ctx, 10, XKB_WARNING_CONFLICTING_KEY_TYPE_MAP_ENTRY,
                     "Multiple occurrences of map[%s]= %d in %s; Ignored\n",
                     MapEntryTxt(info, new), new->level + 1,
                     TypeTxt(info, type));
@@ -340,11 +357,12 @@ SetMapEntry(KeyTypesInfo *info, KeyTypeInfo *type, ExprDef *arrayNdx,
 
     if (!ExprResolveModMask(info->ctx, arrayNdx, MOD_BOTH, &info->mods,
                             &entry.mods.mods))
-        return ReportTypeBadType(info, type, "map entry", "modifier mask");
+        return ReportTypeBadType(info, XKB_ERROR_UNSUPPORTED_MODIFIER_MASK,
+                                 type, "map entry", "modifier mask");
 
     if (entry.mods.mods & (~type->mods)) {
-        log_vrb(info->ctx, 1,
-                "Map entry for unused modifiers in %s; "
+        log_vrb(info->ctx, 1, XKB_WARNING_UNDECLARED_MODIFIERS_IN_KEY_TYPE,
+                "Map entry for modifiers not used by type %s; "
                 "Using %s instead of %s\n",
                 TypeTxt(info, type),
                 ModMaskText(info->ctx, &info->mods,
@@ -354,9 +372,9 @@ SetMapEntry(KeyTypesInfo *info, KeyTypeInfo *type, ExprDef *arrayNdx,
     }
 
     if (!ExprResolveLevel(info->ctx, value, &entry.level)) {
-        log_err(info->ctx,
-                "Level specifications in a key type must be integer; "
-                "Ignoring malformed level specification\n");
+        log_err(info->ctx, XKB_ERROR_UNSUPPORTED_SHIFT_LEVEL,
+                          "Level specifications in a key type must be integer; "
+                          "Ignoring malformed level specification\n");
         return false;
     }
 
@@ -386,7 +404,7 @@ AddPreserve(KeyTypesInfo *info, KeyTypeInfo *type,
 
         /* Map exists with same preserve; do nothing. */
         if (entry->preserve.mods == preserve_mods) {
-            log_vrb(info->ctx, 10,
+            log_vrb(info->ctx, 10, XKB_WARNING_DUPLICATE_ENTRY,
                     "Identical definitions for preserve[%s] in %s; "
                     "Ignored\n",
                     ModMaskText(info->ctx, &info->mods, mods),
@@ -395,7 +413,7 @@ AddPreserve(KeyTypesInfo *info, KeyTypeInfo *type,
         }
 
         /* Map exists with different preserve; latter wins. */
-        log_vrb(info->ctx, 1,
+        log_vrb(info->ctx, 1, XKB_WARNING_CONFLICTING_KEY_TYPE_PRESERVE_ENTRIES,
                 "Multiple definitions for preserve[%s] in %s; "
                 "Using %s, ignoring %s\n",
                 ModMaskText(info->ctx, &info->mods, mods),
@@ -429,8 +447,8 @@ SetPreserve(KeyTypesInfo *info, KeyTypeInfo *type, ExprDef *arrayNdx,
         return ReportTypeShouldBeArray(info, type, "preserve entry");
 
     if (!ExprResolveModMask(info->ctx, arrayNdx, MOD_BOTH, &info->mods, &mods))
-        return ReportTypeBadType(info, type, "preserve entry",
-                                 "modifier mask");
+        return ReportTypeBadType(info, XKB_ERROR_UNSUPPORTED_MODIFIER_MASK,
+                                 type, "preserve entry", "modifier mask");
 
     if (mods & ~type->mods) {
         const char *before, *after;
@@ -439,15 +457,15 @@ SetPreserve(KeyTypesInfo *info, KeyTypeInfo *type, ExprDef *arrayNdx,
         mods &= type->mods;
         after = ModMaskText(info->ctx, &info->mods, mods);
 
-        log_vrb(info->ctx, 1,
-                "Preserve for modifiers not used by the %s type; "
+        log_vrb(info->ctx, 1, XKB_WARNING_UNDECLARED_MODIFIERS_IN_KEY_TYPE,
+                "Preserve entry for modifiers not used by the %s type; "
                 "Index %s converted to %s\n",
                 TypeTxt(info, type), before, after);
     }
 
     if (!ExprResolveModMask(info->ctx, value, MOD_BOTH, &info->mods,
                             &preserve_mods)) {
-        log_err(info->ctx,
+        log_err(info->ctx, XKB_ERROR_UNSUPPORTED_MODIFIER_MASK,
                 "Preserve value in a key type is not a modifier mask; "
                 "Ignoring preserve[%s] in type %s\n",
                 ModMaskText(info->ctx, &info->mods, mods),
@@ -462,7 +480,7 @@ SetPreserve(KeyTypesInfo *info, KeyTypeInfo *type, ExprDef *arrayNdx,
         preserve_mods &= mods;
         after = ModMaskText(info->ctx, &info->mods, preserve_mods);
 
-        log_vrb(info->ctx, 1,
+        log_vrb(info->ctx, 1, XKB_WARNING_ILLEGAL_KEY_TYPE_PRESERVE_RESULT,
                 "Illegal value for preserve[%s] in type %s; "
                 "Converted %s to %s\n",
                 ModMaskText(info->ctx, &info->mods, mods),
@@ -486,7 +504,7 @@ AddLevelName(KeyTypesInfo *info, KeyTypeInfo *type,
 
     /* Same level, same name. */
     if (darray_item(type->level_names, level) == name) {
-        log_vrb(info->ctx, 10,
+        log_vrb(info->ctx, 10, XKB_WARNING_DUPLICATE_ENTRY,
                 "Duplicate names for level %d of key type %s; Ignored\n",
                 level + 1, TypeTxt(info, type));
         return true;
@@ -498,7 +516,7 @@ AddLevelName(KeyTypesInfo *info, KeyTypeInfo *type,
         old = xkb_atom_text(info->ctx,
                             darray_item(type->level_names, level));
         new = xkb_atom_text(info->ctx, name);
-        log_vrb(info->ctx, 1,
+        log_vrb(info->ctx, 1, XKB_WARNING_CONFLICTING_KEY_TYPE_LEVEL_NAMES,
                 "Multiple names for level %d of key type %s; "
                 "Using %s, ignoring %s\n",
                 level + 1, TypeTxt(info, type),
@@ -526,10 +544,11 @@ SetLevelName(KeyTypesInfo *info, KeyTypeInfo *type, ExprDef *arrayNdx,
         return ReportTypeShouldBeArray(info, type, "level name");
 
     if (!ExprResolveLevel(info->ctx, arrayNdx, &level))
-        return ReportTypeBadType(info, type, "level name", "integer");
+        return ReportTypeBadType(info, XKB_ERROR_UNSUPPORTED_SHIFT_LEVEL,
+                                 type, "level name", "integer");
 
     if (!ExprResolveString(info->ctx, value, &level_name)) {
-        log_err(info->ctx,
+        log_err(info->ctx, XKB_ERROR_WRONG_FIELD_TYPE,
                 "Non-string name for level %d in key type %s; "
                 "Ignoring illegal level name definition\n",
                 level + 1, xkb_atom_text(info->ctx, type->name));
@@ -564,7 +583,7 @@ SetKeyTypeField(KeyTypesInfo *info, KeyTypeInfo *type,
         type_field = TYPE_FIELD_LEVEL_NAME;
         ok = SetLevelName(info, type, arrayNdx, value);
     } else {
-        log_err(info->ctx,
+        log_err(info->ctx, XKB_ERROR_UNKNOWN_FIELD,
                 "Unknown field %s in key type %s; Definition ignored\n",
                 field, TypeTxt(info, type));
     }
@@ -586,10 +605,20 @@ HandleKeyTypeBody(KeyTypesInfo *info, VarDef *def, KeyTypeInfo *type)
         if (!ok)
             continue;
 
-        if (elem && istreq(elem, "type")) {
-            log_err(info->ctx,
-                    "Support for changing the default type has been removed; "
-                    "Statement ignored\n");
+        if (elem) {
+            if (istreq(elem, "type")) {
+                log_err(info->ctx, XKB_ERROR_INVALID_SET_DEFAULT_STATEMENT,
+                        "Support for changing the default type has been removed; "
+                        "Statement \"%s.%s\" ignored.\n", elem, field);
+            }
+            else {
+                log_err(info->ctx, XKB_ERROR_GLOBAL_DEFAULTS_WRONG_SCOPE,
+                        "Cannot set global defaults for \"%s\" element within "
+                        "a key type statement: move statements to the global "
+                        "file scope. Assignment to \"%s.%s\" ignored.\n",
+                        elem, elem, field);
+                ok = false;
+            }
             continue;
         }
 
@@ -612,16 +641,16 @@ HandleKeyTypeDef(KeyTypesInfo *info, KeyTypeDef *def, enum merge_mode merge)
         .level_names = darray_new(),
     };
 
-    if (!HandleKeyTypeBody(info, def->body, &type)) {
+    if (!HandleKeyTypeBody(info, def->body, &type) ||
+        !AddKeyType(info, &type, true))
+    {
         info->errorCount++;
+        ClearKeyTypeInfo(&type);
         return false;
     }
 
-    if (!AddKeyType(info, &type, true)) {
-        info->errorCount++;
-        return false;
-    }
-
+    /* Type has been either stolen via shallow copy or reinitialized in
+       `AddKeyType`: no need to free the arrays */
     return true;
 }
 
@@ -642,7 +671,7 @@ HandleKeyTypesFile(KeyTypesInfo *info, XkbFile *file, enum merge_mode merge)
             ok = HandleKeyTypeDef(info, (KeyTypeDef *) stmt, merge);
             break;
         case STMT_VAR:
-            log_err(info->ctx,
+            log_err(info->ctx, XKB_ERROR_WRONG_STATEMENT_TYPE,
                     "Support for changing the default type has been removed; "
                     "Statement ignored\n");
             ok = true;
@@ -651,7 +680,7 @@ HandleKeyTypesFile(KeyTypesInfo *info, XkbFile *file, enum merge_mode merge)
             ok = HandleVModDef(info->ctx, &info->mods, (VModDef *) stmt, merge);
             break;
         default:
-            log_err(info->ctx,
+            log_err(info->ctx, XKB_ERROR_WRONG_STATEMENT_TYPE,
                     "Key type files may not include other declarations; "
                     "Ignoring %s\n", stmt_type_to_string(stmt->type));
             ok = false;
@@ -662,7 +691,7 @@ HandleKeyTypesFile(KeyTypesInfo *info, XkbFile *file, enum merge_mode merge)
             info->errorCount++;
 
         if (info->errorCount > 10) {
-            log_err(info->ctx,
+            log_err(info->ctx, XKB_ERROR_INVALID_SYNTAX,
                     "Abandoning keytypes file \"%s\"\n", file->name);
             break;
         }
@@ -726,7 +755,7 @@ CompileKeyTypes(XkbFile *file, struct xkb_keymap *keymap,
 {
     KeyTypesInfo info;
 
-    InitKeyTypesInfo(&info, keymap->ctx, &keymap->mods);
+    InitKeyTypesInfo(&info, keymap->ctx, 0, &keymap->mods);
 
     HandleKeyTypesFile(&info, file, merge);
     if (info.errorCount != 0)

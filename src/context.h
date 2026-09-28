@@ -26,7 +26,13 @@
 #ifndef CONTEXT_H
 #define CONTEXT_H
 
+#include <stddef.h>
+
+#include "xkbcommon/xkbcommon.h"
 #include "atom.h"
+#include "darray.h"
+#include "messages-codes.h"
+#include "utils.h"
 
 struct xkb_context {
     int refcnt;
@@ -53,7 +59,11 @@ struct xkb_context {
     size_t text_next;
 
     unsigned int use_environment_names : 1;
+    unsigned int use_secure_getenv : 1;
 };
+
+char *
+xkb_context_getenv(struct xkb_context *ctx, const char *name);
 
 unsigned int
 xkb_context_num_failed_include_paths(struct xkb_context *ctx);
@@ -110,27 +120,29 @@ xkb_context_sanitize_rule_names(struct xkb_context *ctx,
  * format is supplied without arguments. Not supplying it would still
  * result in an error, though.
  */
-#define log_dbg(ctx, ...) \
-    xkb_log((ctx), XKB_LOG_LEVEL_DEBUG, 0, __VA_ARGS__)
-#define log_info(ctx, ...) \
-    xkb_log((ctx), XKB_LOG_LEVEL_INFO, 0, __VA_ARGS__)
-#define log_warn(ctx, ...) \
-    xkb_log((ctx), XKB_LOG_LEVEL_WARNING, 0,  __VA_ARGS__)
-#define log_err(ctx, ...) \
-    xkb_log((ctx), XKB_LOG_LEVEL_ERROR, 0,  __VA_ARGS__)
-#define log_wsgo(ctx, ...) \
-    xkb_log((ctx), XKB_LOG_LEVEL_CRITICAL, 0, __VA_ARGS__)
-#define log_vrb(ctx, vrb, ...) \
-    xkb_log((ctx), XKB_LOG_LEVEL_WARNING, (vrb), __VA_ARGS__)
+#define xkb_log_with_code(ctx, level, verbosity, msg_id, fmt, ...) \
+    xkb_log(ctx, level, verbosity, PREPEND_MESSAGE_ID(msg_id, fmt), ##__VA_ARGS__)
+#define log_dbg(ctx, id, ...) \
+    xkb_log_with_code((ctx), XKB_LOG_LEVEL_DEBUG, 0, id, __VA_ARGS__)
+#define log_info(ctx, id, ...) \
+    xkb_log_with_code((ctx), XKB_LOG_LEVEL_INFO, 0, id, __VA_ARGS__)
+#define log_warn(ctx, id, ...) \
+    xkb_log_with_code((ctx), XKB_LOG_LEVEL_WARNING, 0, id, __VA_ARGS__)
+#define log_vrb(ctx, vrb, id, ...) \
+    xkb_log_with_code((ctx), XKB_LOG_LEVEL_WARNING, (vrb), id, __VA_ARGS__)
+#define log_err(ctx, id, ...) \
+    xkb_log_with_code((ctx), XKB_LOG_LEVEL_ERROR, 0, id, __VA_ARGS__)
+#define log_wsgo(ctx, id, ...) \
+    xkb_log_with_code((ctx), XKB_LOG_LEVEL_CRITICAL, 0, id, __VA_ARGS__)
 
 /*
  * Variants which are prefixed by the name of the function they're
  * called from.
  * Here we must have the silly 1 variant.
  */
-#define log_err_func(ctx, fmt, ...) \
-    log_err(ctx, "%s: " fmt, __func__, __VA_ARGS__)
-#define log_err_func1(ctx, fmt) \
-    log_err(ctx, "%s: " fmt, __func__)
+#define log_err_func(ctx, id, fmt, ...) \
+    log_err(ctx, id, "%s: " fmt, __func__, __VA_ARGS__)
+#define log_err_func1(ctx, id, fmt) \
+    log_err(ctx, id, "%s: " fmt, __func__)
 
 #endif

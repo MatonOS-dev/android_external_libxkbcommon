@@ -37,6 +37,7 @@
 #include "xkbcomp/ast-build.h"
 #include "xkbcomp/parser-priv.h"
 #include "scanner-utils.h"
+#include "keysym.h"
 
 struct parser_param {
     struct xkb_context *ctx;
@@ -45,20 +46,20 @@ struct parser_param {
     bool more_maps;
 };
 
-#define parser_err(param, fmt, ...) \
-    scanner_err((param)->scanner, fmt, ##__VA_ARGS__)
+#define parser_err(param, error_id, fmt, ...) \
+    scanner_err((param)->scanner, error_id, fmt, ##__VA_ARGS__)
 
-#define parser_warn(param, fmt, ...) \
-    scanner_warn((param)->scanner, fmt, ##__VA_ARGS__)
+#define parser_warn(param, warning_id, fmt, ...) \
+    scanner_warn((param)->scanner, warning_id, fmt, ##__VA_ARGS__)
 
 static void
 _xkbcommon_error(struct parser_param *param, const char *msg)
 {
-    parser_err(param, "%s", msg);
+    parser_err(param, XKB_ERROR_INVALID_SYNTAX, "%s", msg);
 }
 
 static bool
-resolve_keysym(const char *name, xkb_keysym_t *sym_rtrn)
+resolve_keysym(struct parser_param *param, const char *name, xkb_keysym_t *sym_rtrn)
 {
     xkb_keysym_t sym;
 
@@ -75,6 +76,8 @@ resolve_keysym(const char *name, xkb_keysym_t *sym_rtrn)
     sym = xkb_keysym_from_name(name, XKB_KEYSYM_NO_FLAGS);
     if (sym != XKB_KEY_NoSymbol) {
         *sym_rtrn = sym;
+        check_deprecated_keysyms(parser_warn, param, param->ctx,
+                                 sym, name, name, "%s", "");
         return true;
     }
 
@@ -84,7 +87,7 @@ resolve_keysym(const char *name, xkb_keysym_t *sym_rtrn)
 #define param_scanner param->scanner
 %}
 
-%pure-parser
+%define api.pure
 %lex-param      { struct scanner *param_scanner }
 %parse-param    { struct parser_param *param }
 
@@ -203,11 +206,11 @@ resolve_keysym(const char *name, xkb_keysym_t *sym_rtrn)
 %type <keysym>  KeySym
 %type <any>     Decl
 %type <anyList> DeclList
-%type <expr>    Expr Term Lhs Terminal ArrayInit KeySyms
-%type <expr>    OptKeySymList KeySymList Action Coord CoordList
-%type <exprList> OptExprList ExprList ActionList
+%type <expr>    Expr Term Lhs Terminal ArrayInit Actions KeySyms
+%type <expr>    KeySymList Action Coord CoordList
+%type <exprList> OptExprList ExprList ActionList MultiActionList MultiKeySymList
 %type <var>     VarDecl SymbolsVarDecl
-%type <varList> VarDeclList SymbolsBody
+%type <varList> VarDeclList SymbolsBody OptSymbolsBody
 %type <vmod>    VModDef
 %type <vmodList> VModDefList VModDecl
 %type <interp>  InterpretDecl InterpretMatch
@@ -252,7 +255,7 @@ resolve_keysym(const char *name, xkb_keysym_t *sym_rtrn)
  */
 
 XkbFile         :       XkbCompositeMap
-                        { $$ = param->rtrn = $1; param->more_maps = !!param->rtrn; }
+                        { $$ = param->rtrn = $1; param->more_maps = !!param->rtrn; (void) yynerrs; }
                 |       XkbMapConfig
                         { $$ = param->rtrn = $1; param->more_maps = !!param->rtrn; YYACCEPT; }
                 |       END_OF_FILE
@@ -455,16 +458,19 @@ KeyTypeDecl     :       TYPE String OBRACE
                 ;
 
 SymbolsDecl     :       KEY KEYNAME OBRACE
-                            SymbolsBody
+                            OptSymbolsBody
                         CBRACE SEMI
                         { $$ = SymbolsCreate($2, $4.head); }
+                ;
+
+OptSymbolsBody  :       SymbolsBody { $$ = $1; }
+                |                   { $$.head = $$.last = NULL; }
                 ;
 
 SymbolsBody     :       SymbolsBody COMMA SymbolsVarDecl
                         { $$.head = $1.head; $$.last->common.next = &$3->common; $$.last = $3; }
                 |       SymbolsVarDecl
                         { $$.head = $$.last = $1; }
-                |       { $$.head = $$.last = NULL; }
                 ;
 
 SymbolsVarDecl  :       Lhs EQUALS Expr         { $$ = VarCreate($1, $3); }
@@ -474,10 +480,12 @@ SymbolsVarDecl  :       Lhs EQUALS Expr         { $$ = VarCreate($1, $3); }
                 |       ArrayInit               { $$ = VarCreate(NULL, $1); }
                 ;
 
-ArrayInit       :       OBRACKET OptKeySymList CBRACKET
-                        { $$ = $2; }
-                |       OBRACKET ActionList CBRACKET
-                        { $$ = ExprCreateActionList($2.head); }
+ArrayInit       :       OBRACKET MultiKeySymList CBRACKET
+                        { $$ = $2.head; }
+                |       OBRACKET MultiActionList CBRACKET
+                        { $$ = $2.head; }
+                |       OBRACKET CBRACKET
+                        { $$ = ExprEmptyList(); }
                 ;
 
 GroupCompatDecl :       GROUP Integer EQUALS Expr SEMI
@@ -676,10 +684,28 @@ Term            :       MINUS Term
                         { $$ = $2;  }
                 ;
 
-ActionList      :       ActionList COMMA Action
-                        { $$.head = $1.head; $$.last->common.next = &$3->common; $$.last = $3; }
+MultiActionList :       MultiActionList COMMA Action
+                        {
+                            ExprDef *expr = ExprCreateActionList($3);
+                            $$ = $1;
+                            $$.last->common.next = &expr->common; $$.last = expr;
+                        }
+                |       MultiActionList COMMA Actions
+                        { $$ = $1; $$.last->common.next = &$3->common; $$.last = $3; }
                 |       Action
+                        { $$.head = $$.last = ExprCreateActionList($1); }
+                |       Actions
                         { $$.head = $$.last = $1; }
+                ;
+
+ActionList      :       ActionList COMMA Action
+                        { $$ = $1; $$.last->common.next = &$3->common; $$.last = $3; }
+                |       Action COMMA Action
+                        { $$.head = $1; $$.head->common.next = &$3->common; $$.last = $3; }
+                ;
+
+Actions         :       OBRACE ActionList CBRACE
+                        { $$ = ExprCreateActionList($2.head); }
                 ;
 
 Action          :       FieldSpec OPAREN OptExprList CPAREN
@@ -706,18 +732,27 @@ Terminal        :       String
                         { $$ = ExprCreateKeyName($1); }
                 ;
 
-OptKeySymList   :       KeySymList      { $$ = $1; }
-                |                       { $$ = NULL; }
+MultiKeySymList :       MultiKeySymList COMMA KeySym
+                        {
+                            ExprDef *expr = ExprCreateKeysymList($3);
+                            $$ = $1;
+                            $$.last->common.next = &expr->common; $$.last = expr;
+                        }
+                |       MultiKeySymList COMMA KeySyms
+                        { $$ = $1; $$.last->common.next = &$3->common; $$.last = $3; }
+                |       KeySym
+                        { $$.head = $$.last = ExprCreateKeysymList($1); }
+                |       KeySyms
+                        { $$.head = $$.last = $1; }
                 ;
 
 KeySymList      :       KeySymList COMMA KeySym
                         { $$ = ExprAppendKeysymList($1, $3); }
-                |       KeySymList COMMA KeySyms
-                        { $$ = ExprAppendMultiKeysymList($1, $3); }
-                |       KeySym
-                        { $$ = ExprCreateKeysymList($1); }
-                |       KeySyms
-                        { $$ = ExprCreateMultiKeysymList($1); }
+                |       KeySym COMMA KeySym
+                        {
+                            $$ = ExprCreateKeysymList($1);
+                            $$ = ExprAppendKeysymList($$, $3);
+                        }
                 ;
 
 KeySyms         :       OBRACE KeySymList CBRACE
@@ -726,29 +761,53 @@ KeySyms         :       OBRACE KeySymList CBRACE
 
 KeySym          :       IDENT
                         {
-                            if (!resolve_keysym($1, &$$)) {
-                                parser_warn(param, "unrecognized keysym \"%s\"", $1);
+                            if (!resolve_keysym(param, $1, &$$)) {
+                                parser_warn(
+                                    param,
+                                    XKB_WARNING_UNRECOGNIZED_KEYSYM,
+                                    "unrecognized keysym \"%s\"",
+                                    $1
+                                );
                                 $$ = XKB_KEY_NoSymbol;
                             }
                             free($1);
                         }
+                        /* Handle keysym that is also a keyword  */
                 |       SECTION { $$ = XKB_KEY_section; }
                 |       Integer
                         {
-                            if ($1 < 0) {
-                                parser_warn(param, "unrecognized keysym \"%"PRId64"\"", $1);
+                            if ($1 < XKB_KEYSYM_MIN) {
+                                parser_warn(
+                                    param,
+                                    XKB_WARNING_UNRECOGNIZED_KEYSYM,
+                                    "unrecognized keysym \"%"PRId64"\"",
+                                    $1
+                                );
                                 $$ = XKB_KEY_NoSymbol;
                             }
-                            else if ($1 < 10) {      /* XKB_KEY_0 .. XKB_KEY_9 */
+                            /* Special case for digits 0..9 */
+                            else if ($1 < 10) {     /* XKB_KEY_0 .. XKB_KEY_9 */
                                 $$ = XKB_KEY_0 + (xkb_keysym_t) $1;
                             }
                             else {
-                                char buf[32];
-                                snprintf(buf, sizeof(buf), "0x%"PRIx64, $1);
-                                if (!resolve_keysym(buf, &$$)) {
-                                    parser_warn(param, "unrecognized keysym \"%s\"", buf);
+                                if ($1 <= XKB_KEYSYM_MAX) {
+                                    $$ = (xkb_keysym_t) $1;
+                                    check_deprecated_keysyms(
+                                        parser_warn, param, param->ctx,
+                                        $$, NULL, $$, "0x%"PRIx32, "");
+                                } else {
+                                    parser_warn(
+                                        param, XKB_WARNING_UNRECOGNIZED_KEYSYM,
+                                        "unrecognized keysym \"0x%"PRIx64"\" "
+                                        "(%"PRId64")", $1, $1
+                                    );
                                     $$ = XKB_KEY_NoSymbol;
                                 }
+                                parser_warn(
+                                    param, XKB_WARNING_NUMERIC_KEYSYM,
+                                    "numeric keysym \"0x%"PRIx64"\" (%"PRId64")",
+                                    $1, $1
+                                );
                             }
                         }
                 ;
@@ -829,12 +888,15 @@ parse(struct xkb_context *ctx, struct scanner *scanner, const char *map)
     }
 
     if (ret != 0) {
+        /* Some error happend; clear the Xkbfiles parsed so far */
         FreeXkbFile(first);
+        FreeXkbFile(param.rtrn);
         return NULL;
     }
 
     if (first)
         log_vrb(ctx, 5,
+                XKB_WARNING_MISSING_DEFAULT_SECTION,
                 "No map in include statement, but \"%s\" contains several; "
                 "Using first defined map, \"%s\"\n",
                 scanner->file_name, first->name);

@@ -74,9 +74,12 @@ xkb_keymap_unref(struct xkb_keymap *keymap)
             if (key->groups) {
                 for (unsigned i = 0; i < key->num_groups; i++) {
                     if (key->groups[i].levels) {
-                        for (unsigned j = 0; j < XkbKeyNumLevels(key, i); j++)
+                        for (unsigned j = 0; j < XkbKeyNumLevels(key, i); j++) {
                             if (key->groups[i].levels[j].num_syms > 1)
-                                free(key->groups[i].levels[j].u.syms);
+                                free(key->groups[i].levels[j].s.syms);
+                            if (key->groups[i].levels[j].num_actions > 1)
+                                free(key->groups[i].levels[j].a.actions);
+                        }
                         free(key->groups[i].levels);
                     }
                 }
@@ -128,12 +131,14 @@ xkb_keymap_new_from_names(struct xkb_context *ctx,
 
     ops = get_keymap_format_ops(format);
     if (!ops || !ops->keymap_new_from_names) {
-        log_err_func(ctx, "unsupported keymap format: %d\n", format);
+        log_err_func(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "unsupported keymap format: %d\n", format);
         return NULL;
     }
 
     if (flags & ~(XKB_KEYMAP_COMPILE_NO_FLAGS)) {
-        log_err_func(ctx, "unrecognized flags: %#x\n", flags);
+        log_err_func(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "unrecognized flags: %#x\n", flags);
         return NULL;
     }
 
@@ -176,23 +181,30 @@ xkb_keymap_new_from_buffer(struct xkb_context *ctx,
 
     ops = get_keymap_format_ops(format);
     if (!ops || !ops->keymap_new_from_string) {
-        log_err_func(ctx, "unsupported keymap format: %d\n", format);
+        log_err_func(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "unsupported keymap format: %d\n", format);
         return NULL;
     }
 
     if (flags & ~(XKB_KEYMAP_COMPILE_NO_FLAGS)) {
-        log_err_func(ctx, "unrecognized flags: %#x\n", flags);
+        log_err_func(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "unrecognized flags: %#x\n", flags);
         return NULL;
     }
 
     if (!buffer) {
-        log_err_func1(ctx, "no buffer specified\n");
+        log_err_func1(ctx, XKB_LOG_MESSAGE_NO_ID,
+                      "no buffer specified\n");
         return NULL;
     }
 
     keymap = xkb_keymap_new(ctx, format, flags);
     if (!keymap)
         return NULL;
+
+    /* Allow a zero-terminated string as a buffer */
+    if (length > 0 && buffer[length - 1] == '\0')
+        length--;
 
     if (!ops->keymap_new_from_string(keymap, buffer, length)) {
         xkb_keymap_unref(keymap);
@@ -213,17 +225,20 @@ xkb_keymap_new_from_file(struct xkb_context *ctx,
 
     ops = get_keymap_format_ops(format);
     if (!ops || !ops->keymap_new_from_file) {
-        log_err_func(ctx, "unsupported keymap format: %d\n", format);
+        log_err_func(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "unsupported keymap format: %d\n", format);
         return NULL;
     }
 
     if (flags & ~(XKB_KEYMAP_COMPILE_NO_FLAGS)) {
-        log_err_func(ctx, "unrecognized flags: %#x\n", flags);
+        log_err_func(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "unrecognized flags: %#x\n", flags);
         return NULL;
     }
 
     if (!file) {
-        log_err_func1(ctx, "no file specified\n");
+        log_err_func1(ctx, XKB_LOG_MESSAGE_NO_ID,
+                      "no file specified\n");
         return NULL;
     }
 
@@ -250,7 +265,8 @@ xkb_keymap_get_as_string(struct xkb_keymap *keymap,
 
     ops = get_keymap_format_ops(format);
     if (!ops || !ops->keymap_get_as_string) {
-        log_err_func(keymap->ctx, "unsupported keymap format: %d\n", format);
+        log_err_func(keymap->ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "unsupported keymap format: %d\n", format);
         return NULL;
     }
 
@@ -480,7 +496,6 @@ xkb_keymap_key_get_syms_by_level(struct xkb_keymap *keymap,
                                  const xkb_keysym_t **syms_out)
 {
     const struct xkb_key *key = XkbKey(keymap, kc);
-    int num_syms;
 
     if (!key)
         goto err;
@@ -494,16 +509,16 @@ xkb_keymap_key_get_syms_by_level(struct xkb_keymap *keymap,
     if (level >= XkbKeyNumLevels(key, layout))
         goto err;
 
-    num_syms = key->groups[layout].levels[level].num_syms;
+    const unsigned int num_syms = key->groups[layout].levels[level].num_syms;
     if (num_syms == 0)
         goto err;
 
     if (num_syms == 1)
-        *syms_out = &key->groups[layout].levels[level].u.sym;
+        *syms_out = &key->groups[layout].levels[level].s.sym;
     else
-        *syms_out = key->groups[layout].levels[level].u.syms;
+        *syms_out = key->groups[layout].levels[level].s.syms;
 
-    return num_syms;
+    return (int) num_syms;
 
 err:
     *syms_out = NULL;

@@ -31,10 +31,13 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <libxml/parser.h>
+#include <libxml/tree.h>
 
 #include "xkbcommon/xkbregistry.h"
 
 #include "utils.h"
+#include "test.h"
 
 #define NO_VARIANT NULL
 
@@ -43,6 +46,12 @@ enum {
     LAYOUT,
     VARIANT,
     OPTION,
+};
+
+enum popularity {
+    POPULARITY_UNDEFINED = 0, /* Not member of enum rxkb_popularity */
+    POPULARITY_STANDARD = RXKB_POPULARITY_STANDARD,
+    POPULARITY_EXOTIC = RXKB_POPULARITY_EXOTIC,
 };
 
 struct test_model {
@@ -58,6 +67,7 @@ struct test_layout {
     const char *description;
     const char *iso639[3];  /* language list (iso639 three letter codes), 3 is enough for our test  */
     const char *iso3166[3]; /* country list (iso3166 two letter codes), 3 is enough for our tests */
+    enum popularity popularity;
 };
 
 struct test_option {
@@ -73,6 +83,22 @@ struct test_option_group {
     struct test_option options[10];
 };
 
+static const char *
+popularity_attr(enum popularity popularity)
+{
+    switch (popularity) {
+        case POPULARITY_UNDEFINED:
+            return "";
+        case RXKB_POPULARITY_STANDARD:
+            return " popularity=\"standard\"";
+        case RXKB_POPULARITY_EXOTIC:
+            return " popularity=\"exotic\"";
+        default:
+            fprintf(stderr, "ERROR: unsupported popularity: %d\n", popularity);
+            assert(false);
+    }
+}
+
 static void
 fprint_config_item(FILE *fp,
                    const char *name,
@@ -80,10 +106,11 @@ fprint_config_item(FILE *fp,
                    const char *brief,
                    const char *description,
                    const char * const iso639[3],
-                   const char * const iso3166[3])
+                   const char * const iso3166[3],
+                   enum popularity popularity)
 {
-    fprintf(fp, "  <configItem>\n"
-                "    <name>%s</name>\n", name);
+    fprintf(fp, "  <configItem%s>\n"
+                "    <name>%s</name>\n", popularity_attr(popularity), name);
     if (brief)
         fprintf(fp, "    <shortDescription>%s</shortDescription>\n", brief);
     if (description)
@@ -132,14 +159,13 @@ test_create_rules(const char *ruleset,
     int rc;
     FILE *fp;
 
-    tmpdir = asprintf_safe("/tmp/%s.%d.XXXXXX", ruleset, iteration++);
-    assert(tmpdir);
-    assert(mkdtemp(tmpdir) == tmpdir);
+    char *template = asprintf_safe("%s.%d.XXXXXX", ruleset, iteration++);
+    assert(template != NULL);
+    tmpdir = test_maketempdir(template);
+    free(template);
 
-    rc = snprintf_safe(buf, sizeof(buf), "%s/rules", tmpdir);
-    assert(rc);
-    rc = mkdir(buf, 0777);
-    assert(rc == 0);
+    free(test_makedir(tmpdir, "rules"));
+
     rc = snprintf_safe(buf, sizeof(buf), "%s/rules/%s.xml", tmpdir, ruleset);
     assert(rc);
 
@@ -156,7 +182,8 @@ test_create_rules(const char *ruleset,
 
         for (const struct test_model *m = test_models; m->name; m++) {
             fprintf(fp, "<model>\n");
-            fprint_config_item(fp, m->name, m->vendor, NULL, m->description, NULL, NULL);
+            fprint_config_item(fp, m->name, m->vendor, NULL, m->description,
+                               NULL, NULL, POPULARITY_UNDEFINED);
             fprintf(fp, "</model>\n");
         }
         fprintf(fp, "</modelList>\n");
@@ -174,13 +201,13 @@ test_create_rules(const char *ruleset,
 
         while (l->name) {
             fprintf(fp, "<layout>\n");
-            fprint_config_item(fp, l->name, NULL, l->brief, l->description, l->iso639, l->iso3166);
+            fprint_config_item(fp, l->name, NULL, l->brief, l->description, l->iso639, l->iso3166, l->popularity);
 
             if (next->name && streq(next->name, l->name)) {
                 fprintf(fp, "<variantList>\n");
                 do {
                     fprintf(fp, "<variant>\n");
-                    fprint_config_item(fp, next->variant, NULL, next->brief, next->description, next->iso639, next->iso3166);
+                    fprint_config_item(fp, next->variant, NULL, next->brief, next->description, next->iso639, next->iso3166, next->popularity);
                     fprintf(fp, "</variant>\n");
                     l = next;
                     next++;
@@ -189,6 +216,7 @@ test_create_rules(const char *ruleset,
             }
             fprintf(fp, "</layout>\n");
             l++;
+            next = l + 1;
         }
         fprintf(fp, "</layoutList>\n");
     }
@@ -199,10 +227,12 @@ test_create_rules(const char *ruleset,
         for (const struct test_option_group *g = test_groups; g->name; g++) {
             fprintf(fp, "<group allowMultipleSelection=\"%s\">\n",
                     g->allow_multiple_selection ? "true" : "false");
-            fprint_config_item(fp, g->name, NULL, NULL, g->description, NULL, NULL);
+            fprint_config_item(fp, g->name, NULL, NULL, g->description,
+                               NULL, NULL, POPULARITY_UNDEFINED);
             for (const struct test_option *o = g->options; o->name; o++) {
                 fprintf(fp, "  <option>\n");
-                fprint_config_item(fp, o->name, NULL, NULL, o->description, NULL, NULL);
+                fprint_config_item(fp, o->name, NULL, NULL, o->description,
+                                   NULL, NULL, POPULARITY_UNDEFINED);
                 fprintf(fp, "</option>\n");
             }
             fprintf(fp, "</group>\n");
@@ -373,6 +403,48 @@ out:
     return rc;
 }
 
+static bool
+check_layouts_order(struct rxkb_context *ctx, ...)
+{
+    va_list args;
+    const char *layout, *variant;
+    int idx = 0;
+    bool rc = false;
+    struct rxkb_layout *l = rxkb_layout_first(ctx);
+
+    va_start(args, ctx);
+    layout = va_arg(args, const char *);
+    variant = va_arg(args, const char *);
+    while(layout) {
+        assert(++idx < 20); /* safety guard */
+        if (!l) {
+            fprintf(stderr, "ERROR: expected layout #%d \"%s(%s)\", got none\n",
+                    idx, layout, variant ? variant : "-");
+            goto out;
+        }
+        const char *v = rxkb_layout_get_variant(l);
+        if (!streq(rxkb_layout_get_name(l), layout) || !streq_null(v, variant)) {
+            fprintf(stderr, "ERROR: expected layout #%d \"%s(%s)\", got \"%s(%s)\"\n",
+                    idx, layout, variant ? variant : "-",
+                    rxkb_layout_get_name(l), v ? v : "-");
+            goto out;
+        }
+        layout = va_arg(args, const char *);
+        if (layout)
+            variant = va_arg(args, const char *);
+        l = rxkb_layout_next(l);
+    };
+    if (l) {
+        const char *v = rxkb_layout_get_variant(l);
+        fprintf(stderr, "ERROR: unexpected layout at #%d: \"%s(%s)\"\n",
+                idx + 1, rxkb_layout_get_name(l), v ? v : "-");
+    }
+    rc = l == NULL;
+out:
+    va_end(args);
+    return rc;
+}
+
 static struct rxkb_option_group *
 fetch_option_group(struct rxkb_context *ctx, const char *grp)
 {
@@ -383,14 +455,6 @@ fetch_option_group(struct rxkb_context *ctx, const char *grp)
         g = rxkb_option_group_next(g);
     }
     return NULL;
-}
-
-static inline bool
-find_option_group(struct rxkb_context *ctx, const char *grp)
-{
-    struct rxkb_option_group *g = fetch_option_group(ctx, grp);
-    rxkb_option_group_unref(g);
-    return g != NULL;
 }
 
 static struct rxkb_option *
@@ -486,7 +550,7 @@ cmp_layouts(struct test_layout *tl, struct rxkb_layout *l)
         return false;
 
     iso3166 = rxkb_layout_get_iso3166_first(l);
-    for (size_t i = 0; i < sizeof(tl->iso3166); i++) {
+    for (size_t i = 0; i < ARRAY_SIZE(tl->iso3166); i++) {
         const char *iso = tl->iso3166[i];
         if (iso == NULL && iso3166 == NULL)
             break;
@@ -501,7 +565,7 @@ cmp_layouts(struct test_layout *tl, struct rxkb_layout *l)
         return false;
 
     iso639 = rxkb_layout_get_iso639_first(l);
-    for (size_t i = 0; i < sizeof(tl->iso639); i++) {
+    for (size_t i = 0; i < ARRAY_SIZE(tl->iso639); i++) {
         const char *iso = tl->iso639[i];
         if (iso == NULL && iso639 == NULL)
             break;
@@ -775,35 +839,69 @@ test_load_invalid_languages(void)
 static void
 test_popularity(void)
 {
-    struct test_layout system_layouts[] =  {
-        {"l1", NO_VARIANT },
-        {"l1", "v1" },
+    assert(POPULARITY_UNDEFINED != POPULARITY_STANDARD);
+    assert(POPULARITY_UNDEFINED != POPULARITY_EXOTIC);
+
+    struct test_layout system_layouts[] = {
+        {.name = "l1", .variant = NO_VARIANT }, /* Default popularity */
+        {.name = "l1", .variant = "v1" },       /* Default popularity */
+        {.name = "l2", .popularity = POPULARITY_STANDARD },
+        {.name = "l3", .popularity = POPULARITY_EXOTIC },
         {NULL},
     };
     struct rxkb_context *ctx;
     struct rxkb_layout *l;
-    const char *ruleset = "xkbtests.extras";
-    char *dir = NULL;
+    struct ruleset_conf {
+        const char *ruleset;
+        enum rxkb_context_flags flags;
+        enum rxkb_popularity popularity; /* Default popularity */
+    };
+    struct ruleset_conf rulesets[] = {
+        {   /* Rules with “standard” popularity */
+            .ruleset="xkbtests",
+            .flags=RXKB_CONTEXT_NO_DEFAULT_INCLUDES,
+            .popularity=RXKB_POPULARITY_STANDARD
+        },
+        {   /* Rules with “exotic” popularity (hack, see below) */
+            .ruleset="xkbtests.extras",
+            .flags=RXKB_CONTEXT_NO_DEFAULT_INCLUDES |
+                   RXKB_CONTEXT_LOAD_EXOTIC_RULES,
+            .popularity=RXKB_POPULARITY_EXOTIC
+        }
+    };
+    for (size_t k = 0; k < ARRAY_SIZE(rulesets); k++) {
+        struct ruleset_conf *conf = &rulesets[k];
+        char *dir = NULL;
 
-    dir = test_create_rules(ruleset, NULL, system_layouts, NULL);
-    ctx = rxkb_context_new(RXKB_CONTEXT_NO_DEFAULT_INCLUDES |
-                           RXKB_CONTEXT_LOAD_EXOTIC_RULES);
-    assert(ctx);
-    assert(rxkb_context_include_path_append(ctx, dir));
-    /* Hack: rulest above generates xkbtests.extras.xml, loading "xkbtests"
-     * means the extras file counts as exotic */
-    assert(rxkb_context_parse(ctx, "xkbtests"));
+        dir = test_create_rules(conf->ruleset, NULL, system_layouts, NULL);
+        ctx = rxkb_context_new(conf->flags);
+        assert(ctx);
+        assert(rxkb_context_include_path_append(ctx, dir));
+        /* Hack: ruleset "xkbtests.extras" above generates xkbtests.extras.xml,
+         * loading "xkbtests" means the extras file counts as exotic */
+        assert(rxkb_context_parse(ctx, "xkbtests"));
 
-    l = fetch_layout(ctx, "l1", NO_VARIANT);
-    assert(rxkb_layout_get_popularity(l) == RXKB_POPULARITY_EXOTIC);
-    rxkb_layout_unref(l);
+        /* Test implicit popularity */
+        l = fetch_layout(ctx, "l1", NO_VARIANT);
+        assert(rxkb_layout_get_popularity(l) == conf->popularity);
+        rxkb_layout_unref(l);
 
-    l = fetch_layout(ctx, "l1", "v1");
-    assert(rxkb_layout_get_popularity(l) == RXKB_POPULARITY_EXOTIC);
-    rxkb_layout_unref(l);
+        l = fetch_layout(ctx, "l1", "v1");
+        assert(rxkb_layout_get_popularity(l) == conf->popularity);
+        rxkb_layout_unref(l);
 
-    test_remove_rules(dir, ruleset);
-    rxkb_context_unref(ctx);
+        /* Test explicit popularity */
+        l = fetch_layout(ctx, "l2", NO_VARIANT);
+        assert(rxkb_layout_get_popularity(l) == RXKB_POPULARITY_STANDARD);
+        rxkb_layout_unref(l);
+
+        l = fetch_layout(ctx, "l3", NO_VARIANT);
+        assert(rxkb_layout_get_popularity(l) == RXKB_POPULARITY_EXOTIC);
+        rxkb_layout_unref(l);
+
+        test_remove_rules(dir, conf->ruleset);
+        rxkb_context_unref(ctx);
+    }
 }
 
 
@@ -828,6 +926,9 @@ test_load_merge(void)
     struct test_layout user_layouts[] =  {
         {"l2", NO_VARIANT, "lbrief2", "ldesc2"},
         {"l2", "v2", "vbrief2", "vdesc2"},
+        // Duplicate with system
+        {"l1", NO_VARIANT, "lbrief1bis", "ldesc1bis"},
+        {"l1", "v1", "vbrief1bis", "vdesc1bis"},
         {NULL},
     };
     struct test_option_group system_groups[] = {
@@ -890,6 +991,12 @@ test_load_merge(void)
     l = fetch_layout(ctx, "l2", "v2");
     assert(cmp_layouts(&user_layouts[1], l));
     rxkb_layout_unref(l);
+
+    /* Check that the duplicate layouts are skipped */
+    assert(check_layouts_order(ctx,
+                               "l1", NO_VARIANT, "l1", "v1",
+                               "l2", NO_VARIANT, "l2", "v2",
+                               NULL));
 
     g = fetch_option_group(ctx, "grp1");
     assert(cmp_option_groups(&system_groups[0], g, CMP_EXACT));
@@ -1004,9 +1111,36 @@ test_invalid_include(void)
     rxkb_context_unref(ctx);
 }
 
+/* Check that libxml2 error handler is reset after parsing */
+static void
+test_xml_error_handler(void)
+{
+    struct test_model system_models[] =  { {NULL} };
+    struct test_layout system_layouts[] =  { {NULL} };
+    struct test_option_group system_groups[] = { { NULL } };
+    struct rxkb_context *ctx;
+
+    ctx = test_setup_context(system_models, NULL,
+                             system_layouts, NULL,
+                             system_groups, NULL);
+    assert(ctx);
+    rxkb_context_unref(ctx);
+
+    const char invalid_xml[] = "<test";
+    /* This should trigger a segfault if error handler is not reset, because
+     * else it would use our error handler with an invalid (freed) context. */
+    xmlDocPtr doc = xmlParseMemory (invalid_xml, strlen(invalid_xml));
+    assert(!doc);
+    xmlFreeDoc (doc);
+    xmlCleanupParser();
+}
+
 int
 main(void)
 {
+    test_init();
+
+    test_xml_error_handler();
     test_no_include_paths();
     test_invalid_include();
     test_load_basic();

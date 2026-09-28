@@ -27,6 +27,8 @@
 #ifndef XKBCOMP_AST_BUILD_H
 #define XKBCOMP_AST_BUILD_H
 
+#include "ast.h"
+
 ExprDef *
 ExprCreateString(xkb_atom_t str);
 
@@ -59,19 +61,16 @@ ExprDef *
 ExprCreateArrayRef(xkb_atom_t element, xkb_atom_t field, ExprDef *entry);
 
 ExprDef *
+ExprEmptyList(void);
+
+ExprDef *
 ExprCreateAction(xkb_atom_t name, ExprDef *args);
 
 ExprDef *
 ExprCreateActionList(ExprDef *actions);
 
 ExprDef *
-ExprCreateMultiKeysymList(ExprDef *list);
-
-ExprDef *
 ExprCreateKeysymList(xkb_keysym_t sym);
-
-ExprDef *
-ExprAppendMultiKeysymList(ExprDef *list, ExprDef *append);
 
 ExprDef *
 ExprAppendKeysymList(ExprDef *list, xkb_keysym_t sym);

@@ -75,16 +75,19 @@ If the procedure fails, G is cyclic, and we go back to step 2, replacing G
 with a new graph, and thereby discarding the vertex values from the failed
 attempt.
 """
+
 from __future__ import absolute_import, division, print_function
 
-import sys
 import random
+import shutil
 import string
 import subprocess
-import shutil
+import sys
 import tempfile
 from collections import defaultdict
+from optparse import Values
 from os.path import join
+from typing import Any, Sequence, TypeVar
 
 if sys.version_info[0] == 2:
     from cStringIO import StringIO
@@ -92,7 +95,7 @@ else:
     from io import StringIO
 
 
-__version__ = '0.4.2'
+__version__ = "0.4.2"
 
 
 verbose = False
@@ -107,14 +110,15 @@ class Graph(object):
     are assigned such that the two values corresponding to an edge add up to
     the desired edge value (mod N).
     """
-    def __init__(self, N):
-        self.N = N                     # number of vertices
+
+    def __init__(self, N: int):
+        self.N = N  # number of vertices
 
         # maps a vertex number to the list of tuples (vertex, edge value)
         # to which it is connected by edges.
-        self.adjacent = defaultdict(list)
+        self.adjacent: dict[int, list[tuple[int, int]]] = defaultdict(list)
 
-    def connect(self, vertex1, vertex2, edge_value):
+    def connect(self, vertex1: int, vertex2: int, edge_value: int) -> None:
         """
         Connect 'vertex1' and 'vertex2' with an edge, with associated
         value 'value'
@@ -123,7 +127,7 @@ class Graph(object):
         self.adjacent[vertex1].append((vertex2, edge_value))
         self.adjacent[vertex2].append((vertex1, edge_value))
 
-    def assign_vertex_values(self):
+    def assign_vertex_values(self) -> bool:
         """
         Try to assign the vertex values, such that, for each edge, you can
         add the values for the two vertices involved and get the desired
@@ -145,10 +149,10 @@ class Graph(object):
                 continue
 
             # explore tree starting at 'root'
-            self.vertex_values[root] = 0    # set arbitrarily to zero
+            self.vertex_values[root] = 0  # set arbitrarily to zero
 
             # Stack of vertices to visit, a list of tuples (parent, vertex)
-            tovisit = [(None, root)]
+            tovisit: list[tuple[int | None, int]] = [(None, root)]
             while tovisit:
                 parent, vertex = tovisit.pop()
                 visited[vertex] = True
@@ -170,7 +174,8 @@ class Graph(object):
                     # Set new vertex's value to the desired edge value,
                     # minus the value of the vertex we came here from.
                     self.vertex_values[neighbor] = (
-                        edge_value - self.vertex_values[vertex]) % self.N
+                        edge_value - self.vertex_values[vertex]
+                    ) % self.N
 
         # check if all vertices have a valid value
         for vertex in range(self.N):
@@ -181,27 +186,27 @@ class Graph(object):
         return True
 
 
-class StrSaltHash(object):
+class StrSaltHash:
     """
     Random hash function generator.
     Simple byte level hashing: each byte is multiplied to another byte from
     a random string of characters, summed up, and finally modulo NG is
     taken.
     """
+
     chars = string.ascii_letters + string.digits
 
-    def __init__(self, N):
+    def __init__(self, N: int):
         self.N = N
-        self.salt = ''
+        self.salt = ""
 
-    def __call__(self, key):
+    def __call__(self, key: Sequence[str]) -> int:
         # XXX: xkbcommon modification: make the salt length a power of 2
         #      so that the % operation in the hash is fast.
-        while len(self.salt) < max(len(key), 32): # add more salt as necessary
+        while len(self.salt) < max(len(key), 32):  # add more salt as necessary
             self.salt += random.choice(self.chars)
 
-        return sum(ord(self.salt[i]) * ord(c)
-                   for i, c in enumerate(key)) % self.N
+        return sum(ord(self.salt[i]) * ord(c) for i, c in enumerate(key)) % self.N
 
     template = """
 def hash_f(key, T):
@@ -212,22 +217,23 @@ def perfect_hash(key):
             G[hash_f(key, "$S2")]) % $NG
 """
 
-class IntSaltHash(object):
+
+class IntSaltHash:
     """
     Random hash function generator.
     Simple byte level hashing, each byte is multiplied in sequence to a table
     containing random numbers, summed tp, and finally modulo NG is taken.
     """
-    def __init__(self, N):
-        self.N = N
-        self.salt = []
 
-    def __call__(self, key):
-        while len(self.salt) < len(key): # add more salt as necessary
+    def __init__(self, N: int):
+        self.N: int = N
+        self.salt: list[int] = []
+
+    def __call__(self, key: Sequence[str]) -> int:
+        while len(self.salt) < len(key):  # add more salt as necessary
             self.salt.append(random.randint(1, self.N - 1))
 
-        return sum(self.salt[i] * ord(c)
-                   for i, c in enumerate(key)) % self.N
+        return sum(self.salt[i] * ord(c) for i, c in enumerate(key)) % self.N
 
     template = """
 S1 = [$S1]
@@ -241,14 +247,21 @@ def perfect_hash(key):
     return (G[hash_f(key, S1)] + G[hash_f(key, S2)]) % $NG
 """
 
-def builtin_template(Hash):
-    return """\
+
+H = TypeVar("H", StrSaltHash, IntSaltHash)
+
+
+def builtin_template(Hash: type[H]) -> str:
+    return (
+        """\
 # =======================================================================
 # ================= Python code for perfect hash function ===============
 # =======================================================================
 
 G = [$G]
-""" + Hash.template + """
+"""
+        + Hash.template
+        + """
 # ============================ Sanity check =============================
 
 K = [$K]
@@ -257,13 +270,20 @@ assert len(K) == $NK
 for h, k in enumerate(K):
     assert perfect_hash(k) == h
 """
+    )
 
 
 class TooManyInterationsError(Exception):
     pass
 
 
-def generate_hash(keys, Hash=StrSaltHash):
+# NOTE: as of mypy 1.13, it is not possible to specify a default value for a generic
+# parameter, so `Hash: type[H] = StrSaltHash` will raise a type error. See:
+# • https://github.com/python/mypy/issues/3737
+# • https://github.com/python/mypy/issues/18017
+def generate_hash(
+    keys: list[str], Hash: type[H] = StrSaltHash
+) -> tuple[H, H, list[int]]:
     """
     Return hash functions f1 and f2, and G for a perfect minimal hash.
     Input is an iterable of 'keys', whos indicies are the desired hash values.
@@ -279,35 +299,38 @@ def generate_hash(keys, Hash=StrSaltHash):
         if not isinstance(key, str):
             raise TypeError("key a not string: %r" % key)
     if NK > 10000 and Hash == StrSaltHash:
-        print("""\
+        print(
+            """\
 WARNING: You have %d keys.
          Using --hft=1 is likely to fail for so many keys.
          Please use --hft=2 instead.
-""" % NK)
+"""
+            % NK
+        )
 
     # the number of vertices in the graph G
     NG = NK + 1
     if verbose:
-        print('NG = %d' % NG)
+        print("NG = %d" % NG)
 
     trial = 0  # Number of trial graphs so far
     while True:
-        if (trial % trials) == 0:   # trials failures, increase NG slightly
+        if (trial % trials) == 0:  # trials failures, increase NG slightly
             if trial > 0:
                 NG = max(NG + 1, int(1.05 * NG))
             if verbose:
-                sys.stdout.write('\nGenerating graphs NG = %d ' % NG)
+                sys.stdout.write("\nGenerating graphs NG = %d " % NG)
         trial += 1
 
         if NG > 100 * (NK + 1):
             raise TooManyInterationsError("%d keys" % NK)
 
         if verbose:
-            sys.stdout.write('.')
+            sys.stdout.write(".")
             sys.stdout.flush()
 
-        G = Graph(NG)   # Create graph with NG vertices
-        f1 = Hash(NG)   # Create 2 random hash functions
+        G = Graph(NG)  # Create graph with NG vertices
+        f1 = Hash(NG)  # Create 2 random hash functions
         f2 = Hash(NG)
 
         # Connect vertices given by the values of the two hash functions
@@ -322,35 +345,32 @@ WARNING: You have %d keys.
             break
 
     if verbose:
-        print('\nAcyclic graph found after %d trials.' % trial)
-        print('NG = %d' % NG)
+        print("\nAcyclic graph found after %d trials." % trial)
+        print("NG = %d" % NG)
 
     # Sanity check the result by actually verifying that all the keys
     # hash to the right value.
     for hashval, key in enumerate(keys):
-        assert hashval == (
-            G.vertex_values[f1(key)] + G.vertex_values[f2(key)]
-        ) % NG
+        assert hashval == (G.vertex_values[f1(key)] + G.vertex_values[f2(key)]) % NG
 
     if verbose:
-        print('OK')
+        print("OK")
 
     return f1, f2, G.vertex_values
 
 
 class Format(object):
-
-    def __init__(self, width=76, indent=4, delimiter=', '):
+    def __init__(self, width: int = 76, indent: int = 4, delimiter: str = ", "):
         self.width = width
         self.indent = indent
         self.delimiter = delimiter
 
-    def print_format(self):
+    def print_format(self) -> None:
         print("Format options:")
-        for name in 'width', 'indent', 'delimiter':
-            print('  %s: %r' % (name, getattr(self, name)))
+        for name in "width", "indent", "delimiter":
+            print("  %s: %r" % (name, getattr(self, name)))
 
-    def __call__(self, data, quote=False):
+    def __call__(self, data: Any, quote: bool = False) -> str:
         if not isinstance(data, (list, tuple)):
             return str(data)
 
@@ -360,10 +380,10 @@ class Format(object):
         for i, elt in enumerate(data):
             last = bool(i == len(data) - 1)
 
-            s = ('"%s"' if quote else '%s') % elt
+            s = ('"%s"' if quote else "%s") % elt
 
             if pos + len(s) + lendel > self.width:
-                aux.write('\n' + (self.indent * ' '))
+                aux.write("\n" + (self.indent * " "))
                 pos = self.indent
 
             aux.write(s)
@@ -372,10 +392,15 @@ class Format(object):
                 aux.write(self.delimiter)
                 pos += lendel
 
-        return '\n'.join(l.rstrip() for l in aux.getvalue().split('\n'))
+        return "\n".join(l.rstrip() for l in aux.getvalue().split("\n"))
 
 
-def generate_code(keys, Hash=StrSaltHash, template=None, options=None):
+def generate_code(
+    keys: list[str],
+    Hash: type[H] = StrSaltHash,
+    template: str | None = None,
+    options: Values | None = None,
+) -> str:
     """
     Takes a list of key value pairs and inserts the generated parameter
     lists into the 'template' string.  'Hash' is the random hash function
@@ -397,23 +422,25 @@ def generate_code(keys, Hash=StrSaltHash, template=None, options=None):
     if options is None:
         fmt = Format()
     else:
-        fmt = Format(width=options.width, indent=options.indent,
-                     delimiter=options.delimiter)
+        fmt = Format(
+            width=options.width, indent=options.indent, delimiter=options.delimiter
+        )
 
     if verbose:
         fmt.print_format()
 
     return string.Template(template).substitute(
-        NS = salt_len,
-        S1 = fmt(f1.salt),
-        S2 = fmt(f2.salt),
-        NG = len(G),
-        G  = fmt(G),
-        NK = len(keys),
-        K  = fmt(list(keys), quote=True))
+        NS=salt_len,
+        S1=fmt(f1.salt),
+        S2=fmt(f2.salt),
+        NG=len(G),
+        G=fmt(G),
+        NK=len(keys),
+        K=fmt(list(keys), quote=True),
+    )
 
 
-def read_table(filename, options):
+def read_table(filename: str, options: Values) -> list[str]:
     """
     Reads keys and desired hash value pairs from a file.  If no column
     for the hash value is specified, a sequence of hash values is generated,
@@ -430,24 +457,25 @@ def read_table(filename, options):
 
     if verbose:
         print("Reader options:")
-        for name in 'comment', 'splitby', 'keycol':
-            print('  %s: %r' % (name, getattr(options, name)))
+        for name in "comment", "splitby", "keycol":
+            print("  %s: %r" % (name, getattr(options, name)))
 
     for n, line in enumerate(fi):
         line = line.strip()
         if not line or line.startswith(options.comment):
             continue
 
-        if line.count(options.comment): # strip content after comment
+        if line.count(options.comment):  # strip content after comment
             line = line.split(options.comment)[0].strip()
 
         row = [col.strip() for col in line.split(options.splitby)]
 
         try:
-            key = row[options.keycol - 1]
+            key: str = row[options.keycol - 1]
         except IndexError:
-            sys.exit("%s:%d: Error: Cannot read key, not enough columns." %
-                     (filename, n + 1))
+            sys.exit(
+                "%s:%d: Error: Cannot read key, not enough columns." % (filename, n + 1)
+            )
 
         keys.append(key)
 
@@ -459,20 +487,20 @@ def read_table(filename, options):
     return keys
 
 
-def read_template(filename):
+def read_template(filename: str) -> str:
     if verbose:
         print("Reading template from file `%s'" % filename)
     try:
-        with open(filename, 'r') as fi:
+        with open(filename, "r") as fi:
             return fi.read()
     except IOError:
         sys.exit("Error: Could not open `%s' for reading." % filename)
 
 
-def run_code(code):
+def run_code(code: str) -> None:
     tmpdir = tempfile.mkdtemp()
-    path = join(tmpdir, 't.py')
-    with open(path, 'w') as fo:
+    path = join(tmpdir, "t.py")
+    with open(path, "w") as fo:
         fo.write(code)
     try:
         subprocess.check_call([sys.executable, path])
@@ -482,7 +510,7 @@ def run_code(code):
         shutil.rmtree(tmpdir)
 
 
-def main():
+def main() -> None:
     from optparse import OptionParser
 
     usage = "usage: %prog [options] KEYS_FILE [TMPL_FILE]"
@@ -494,102 +522,122 @@ If no template file is provided, a small built-in Python template
 is processed and the output code is written to stdout.
 """
 
-    parser = OptionParser(usage = usage,
-                          description = description,
-                          prog = sys.argv[0],
-                          version = "%prog: " + __version__)
+    parser = OptionParser(
+        usage=usage,
+        description=description,
+        prog=sys.argv[0],
+        version="%prog: " + __version__,
+    )
 
-    parser.add_option("--delimiter",
-                      action  = "store",
-                      default = ", ",
-                      help    = "Delimiter for list items used in output, "
-                                "the default delimiter is '%default'",
-                      metavar = "STR")
+    parser.add_option(
+        "--delimiter",
+        action="store",
+        default=", ",
+        help="Delimiter for list items used in output, "
+        "the default delimiter is '%default'",
+        metavar="STR",
+    )
 
-    parser.add_option("--indent",
-                      action  = "store",
-                      default = 4,
-                      type    = "int",
-                      help    = "Make INT spaces at the beginning of a "
-                                "new line when generated list is wrapped. "
-                                "Default is %default",
-                      metavar = "INT")
+    parser.add_option(
+        "--indent",
+        action="store",
+        default=4,
+        type="int",
+        help="Make INT spaces at the beginning of a "
+        "new line when generated list is wrapped. "
+        "Default is %default",
+        metavar="INT",
+    )
 
-    parser.add_option("--width",
-                      action  = "store",
-                      default = 76,
-                      type    = "int",
-                      help    = "Maximal width of generated list when "
-                                "wrapped.  Default width is %default",
-                      metavar = "INT")
+    parser.add_option(
+        "--width",
+        action="store",
+        default=76,
+        type="int",
+        help="Maximal width of generated list when wrapped.  Default width is %default",
+        metavar="INT",
+    )
 
-    parser.add_option("--comment",
-                      action  = "store",
-                      default = "#",
-                      help    = "STR is the character, or sequence of "
-                                "characters, which marks the beginning "
-                                "of a comment (which runs till "
-                                "the end of the line), in the input "
-                                "KEYS_FILE. "
-                                "Default is '%default'",
-                      metavar = "STR")
+    parser.add_option(
+        "--comment",
+        action="store",
+        default="#",
+        help="STR is the character, or sequence of "
+        "characters, which marks the beginning "
+        "of a comment (which runs till "
+        "the end of the line), in the input "
+        "KEYS_FILE. "
+        "Default is '%default'",
+        metavar="STR",
+    )
 
-    parser.add_option("--splitby",
-                      action  = "store",
-                      default = ",",
-                      help    = "STR is the character by which the columns "
-                                "in the input KEYS_FILE are split. "
-                                "Default is '%default'",
-                      metavar = "STR")
+    parser.add_option(
+        "--splitby",
+        action="store",
+        default=",",
+        help="STR is the character by which the columns "
+        "in the input KEYS_FILE are split. "
+        "Default is '%default'",
+        metavar="STR",
+    )
 
-    parser.add_option("--keycol",
-                      action  = "store",
-                      default = 1,
-                      type    = "int",
-                      help    = "Specifies the column INT in the input "
-                                "KEYS_FILE which contains the keys. "
-                                "Default is %default, i.e. the first column.",
-                      metavar = "INT")
+    parser.add_option(
+        "--keycol",
+        action="store",
+        default=1,
+        type="int",
+        help="Specifies the column INT in the input "
+        "KEYS_FILE which contains the keys. "
+        "Default is %default, i.e. the first column.",
+        metavar="INT",
+    )
 
-    parser.add_option("--trials",
-                      action  = "store",
-                      default = 5,
-                      type    = "int",
-                      help    = "Specifies the number of trials before "
-                                "NG is increased.  A small INT will give "
-                                "compute faster, but the array G will be "
-                                "large.  A large INT will take longer to "
-                                "compute but G will be smaller. "
-                                "Default is %default",
-                      metavar = "INT")
+    parser.add_option(
+        "--trials",
+        action="store",
+        default=5,
+        type="int",
+        help="Specifies the number of trials before "
+        "NG is increased.  A small INT will give "
+        "compute faster, but the array G will be "
+        "large.  A large INT will take longer to "
+        "compute but G will be smaller. "
+        "Default is %default",
+        metavar="INT",
+    )
 
-    parser.add_option("--hft",
-                      action  = "store",
-                      default = 1,
-                      type    = "int",
-                      help    = "Hash function type INT.  Possible values "
-                                "are 1 (StrSaltHash) and 2 (IntSaltHash). "
-                                "The default is %default",
-                      metavar = "INT")
+    parser.add_option(
+        "--hft",
+        action="store",
+        default=1,
+        type="int",
+        help="Hash function type INT.  Possible values "
+        "are 1 (StrSaltHash) and 2 (IntSaltHash). "
+        "The default is %default",
+        metavar="INT",
+    )
 
-    parser.add_option("-e", "--execute",
-                      action  = "store_true",
-                      help    = "Execute the generated code within "
-                                "the Python interpreter.")
+    parser.add_option(
+        "-e",
+        "--execute",
+        action="store_true",
+        help="Execute the generated code within the Python interpreter.",
+    )
 
-    parser.add_option("-o", "--output",
-                      action  = "store",
-                      help    = "Specify output FILE explicitly. "
-                                "`-o std' means standard output. "
-                                "`-o no' means no output. "
-                                "By default, the file name is obtained "
-                                "from the name of the template file by "
-                                "substituting `tmpl' to `code'.",
-                      metavar = "FILE")
+    parser.add_option(
+        "-o",
+        "--output",
+        action="store",
+        help="Specify output FILE explicitly. "
+        "`-o std' means standard output. "
+        "`-o no' means no output. "
+        "By default, the file name is obtained "
+        "from the name of the template file by "
+        "substituting `tmpl' to `code'.",
+        metavar="FILE",
+    )
 
-    parser.add_option("-v", "--verbose",
-                      action = "store_true",
-                      help = "verbosity")
+    parser.add_option("-v", "--verbose", action="store_true", help="verbosity")
 
     options, args = parser.parse_args()
 
@@ -605,11 +653,11 @@ is processed and the output code is written to stdout.
     if len(args) not in (1, 2):
         parser.error("incorrect number of arguments")
 
-    if len(args) == 2 and not args[1].count('tmpl'):
+    if len(args) == 2 and not args[1].count("tmpl"):
         parser.error("template filename does not contain 'tmpl'")
 
     if options.hft == 1:
-        Hash = StrSaltHash
+        Hash: type = StrSaltHash
     elif options.hft == 2:
         Hash = IntSaltHash
     else:
@@ -638,22 +686,22 @@ is processed and the output code is written to stdout.
         outname = options.output
     else:
         if tmpl_file:
-            if 'tmpl' not in tmpl_file:
+            if "tmpl" not in tmpl_file:
                 sys.exit("Hmm, template filename does not contain 'tmpl'")
-            outname = tmpl_file.replace('tmpl', 'code')
+            outname = tmpl_file.replace("tmpl", "code")
         else:
-            outname = 'std'
+            outname = "std"
 
     if verbose:
         print("outname = %r\n" % outname)
 
-    if outname == 'std':
+    if outname == "std":
         outstream = sys.stdout
-    elif outname == 'no':
+    elif outname == "no":
         outstream = None
     else:
         try:
-            outstream = open(outname, 'w')
+            outstream = open(outname, "w")
         except IOError:
             sys.exit("Error: Could not open `%s' for writing." % outname)
 
@@ -661,14 +709,14 @@ is processed and the output code is written to stdout.
 
     if options.execute or template == builtin_template(Hash):
         if verbose:
-            print('Executing code...\n')
+            print("Executing code...\n")
         run_code(code)
 
     if outstream:
         outstream.write(code)
-        if not outname == 'std':
+        if not outname == "std":
             outstream.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

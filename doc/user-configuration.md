@@ -1,27 +1,44 @@
-# User-configuration
+# User-configuration {#user-configuration}
 
-This page describes how to add a custom layout or option so that it will be
+This page describes how to add a *custom* layout or option so that it will be
 parsed by libxkbcommon.
 
-**The below requires libxkbcommon as keymap compiler and does not work in X**.
+@note For an introduction to XKB and keymap components, please see
+“@ref xkb-intro ""”.
 
-## Data locations
+@warning The below requires libxkbcommon as keymap compiler and
+**does not work in X**.
+
+@important An erroneous XKB configuration may make your keyboard unusable.
+Therefore it is advised to try custom configurations safely using `xkbcli` tools;
+see [debugging] for further details.
+
+[debugging]: @ref testing-custom-config
+
+@tableofcontents{html:2}
+
+## Data locations {#user-config-locations}
 
 libxkbcommon searches the following paths for XKB configuration files:
-- `$XDG_CONFIG_HOME/xkb/`, or `$HOME/.config/xkb/` if the `$XDG_CONFIG_HOME`
-  environment variable is not defined
-- `$HOME/.xkb/`
-- `$XKB_CONFIG_EXTRA_PATH` if set, otherswise `<sysconfdir>/xkb` (on most
-  distributions this is `/etc/xkb`)
-- `$XKB_CONFIG_ROOT` if set, otherwise `<datadir>/X11/xkb/` (path defined by the
-  `xkeyboard-config` package, on most distributions this is
-  `/usr/share/X11/xkb`)
+1. `$XDG_CONFIG_HOME/xkb/`, or `$HOME/.config/xkb/` if the `$XDG_CONFIG_HOME`
+   environment variable is not defined. See the [XDG Base Directory Specification]
+   for further details.
+2. <div><!-- [HACK] Doxygen requires this extra div -->
+   @deprecated `$HOME/.xkb/` as a *legacy* alternative to the previous XDG option.
+   </div>
+3. `$XKB_CONFIG_EXTRA_PATH` if set, otherwise `<sysconfdir>/xkb` (on most
+   distributions this is `/etc/xkb`).
+4. `$XKB_CONFIG_ROOT` if set, otherwise `<datadir>/X11/xkb/` (path defined by
+   the `xkeyboard-config` package, on most distributions this is
+   `/usr/share/X11/xkb`).
 
-A keymap created with `xkb_keymap_new_from_names()` will look up those paths in
-order until the required data is found.
+[XDG Base Directory Specification]: https://specifications.freedesktop.org/basedir-spec/latest/
 
-**Note: Where libxkbcommon runs in a privileged context, only the system
-(datadir) path is available.**
+A keymap created with `xkb_keymap::xkb_keymap_new_from_names()` will look up
+those paths in order until the required data is found.
+
+@note Where libxkbcommon runs in a privileged context, only the system
+(`<datadir>`) path is available.
 
 Each directory should have one or more of the following subdirectories:
 - `compat`
@@ -31,23 +48,25 @@ Each directory should have one or more of the following subdirectories:
 - `symbols`
 - `types`
 
-The majority of user-specific configuration involve modifying key symbols and
+The majority of user-specific configurations involve modifying key symbols and
 this is what this document focuses on. For use-cases where a user may need to
 add new key types or compat entries the general approach remains the same. A
 detailed description for how to add those types or compat entries is out of
 scope for this document.
 
 You should never need to add user-specific keycodes. Where a keycode is missing,
-the addition should be filed in the upstream xkeyboard-config project.
+the addition should be filed in the upstream [xkeyboard-config] project.
+
+[xkeyboard-config]: https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config
 
 ## RMLVO vs KcCGST
 
 Due to how XKB is configured, there is no such thing as a "layout" in XKB
-itself, or, indeed, any of the rules, models, variant, options (RMLVO) decribed
+itself, or, indeed, any of the rules, models, variant, options (RMLVO) described
 in `struct xkb_rule_names`. RMLVO names are merely lookup keys in the
-rules file provided by xkeyboard-config to map to the correct keycode, compat,
+rules file provided by [xkeyboard-config] to map to the correct keycode, compat,
 geometry (ignored by libxkbcommon), symbols and types (KcCGST). The KcCGST data
-is the one used by XKB and libxbkcommon to map keys to actual symbols.
+is the one used by XKB and libxkbcommon to map keys to actual symbols.
 
 For example, a common RMLVO configuration is layout "us", variant "dvorak" and
 option "terminate:ctrl_alt_bksp". Using the default rules file and model
@@ -76,7 +95,7 @@ The default rules files (usually `evdev`) have a catch-all to map a layout, say
 "foo", and a variant, say "bar", into the "bar" section in the file
 `$xkb_base_dir/symbols/foo`.
 This is sufficient to define a new keyboard layout. The example below defines
-the keyboard layout "banana" with an optional variant "orange"
+the keyboard layout "banana" with an optional variant "orange":
 
 ```
 $ cat $XDG_CONFIG_HOME/xkb/symbols/banana
@@ -112,9 +131,9 @@ xkb_symbols "orange" {
 The `default` section is loaded when no variant is given. The first example
 sections uses ``include`` to populate with a symbols list defined elsewhere
 (here: section `basic` from the file `symbols/us`, aka. the default US keyboard
-layout) and overrides parts of these
-symbols. The effect of this section is to swap the numbers and symbols in the
-top-most row (compared to the US layout) but otherwise use the US layout.
+layout) and overrides parts of these symbols. The effect of this section is to
+swap the numbers and symbols in the top-most row (compared to the US layout) but
+otherwise use the US layout.
 
 The "orange" variant uses the "banana" symbols and includes a different section
 to define the eurosign. It does not specificially override any symbols.
@@ -168,13 +187,13 @@ the "custom:foo" and/or "custom:baz" options.
 
 ## Discoverable layouts
 
-**The below requires libxkbregistry as XKB lookup tool and does not work where
-clients parse the XML file directly**.
+@warning The below requires `libxkbregistry` as XKB lookup tool and
+**does not work where clients parse the XML file directly**.
 
 The above sections apply only to the data files and require that the user knows
 about the existence of the new entries. To make custom entries discoverable by
 the configuration tools (e.g. the GNOME Control Center), the new entries must
-also be added to the XML file that is parsed by libxkbregistry. In most cases,
+also be added to the XML file that is parsed by `libxkbregistry`. In most cases,
 this is the `evdev.xml` file in the rules directory. The example below shows the
 XML file that would add the custom layout and custom options as outlined above
 to the XKB registry:
@@ -225,8 +244,14 @@ $ cat $XDG_CONFIG_HOME/xkb/rules/evdev.xml
 </xkbConfigRegistry>
 ```
 
-The default behavior of libxkbregistry ensures that the new layout and options
+The default behavior of `libxkbregistry` ensures that the new layout and options
 are added to the system-provided layouts and options.
 
-For details on the XML format, see DTD in `<datadir>/X11/xkb/rules/xkb.dtd`
-and the system-provided XML files in `<datadir>/X11/xkb/rulies/xkb.dtd`.
+For details on the XML format, see the DTD in `<datadir>/X11/xkb/rules/xkb.dtd`
+and the system-provided XML files `<datadir>/X11/xkb/rules/*.xml`.
+
+@note Depending on the desktop environment, it may require restarting the session
+in order to make the configuration changes effective.
+
+@note It is advised to try the custom configuration *before* restarting the
+session using the various `xkbcli` tools. See [debugging] for further details.

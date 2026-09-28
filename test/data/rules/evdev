@@ -29,7 +29,7 @@
 ! $tmgeometries = tm2020 tm2030PS2 tm2030USB tm2030USB-102 tm2030USB-106
 
 // Layouts that provide further specializations for the OLPC
-! $olpclayouts = af am ara br ca es et fr it kh kz in mn np ru th tr us 
+! $olpclayouts = af am ara br ca es et fr it kh kz in mn np ru th tr us
 
 ! $macbooks = macbook78 macbook79
 ! $maclaptop = ibook powerbook macbook78 macbook79
@@ -39,7 +39,7 @@
 ! $macvendorlayouts = ch de dk fi fr gb is it latam nl no pt se us
 
 ! $azerty = be fr
-! $qwertz = al cz de hr hu ro si sk 
+! $qwertz = al cz de hr hu ro si sk
 
 
 // all layouts with 3rd and 4th groups
@@ -1016,6 +1016,12 @@
   grp:alt_shift_toggle	=	+group(alt_shift_toggle)
   grp:alt_shift_toggle_bidir	=	+group(alt_shift_toggle_bidir)
   grp:lctrl_lwin_toggle	=	+group(lctrl_lwin_toggle)
+  grp:menu_latch_group2	=	+group(menu_latch_group2)
+  grp:menu_latch_group2_lock	=	+group(menu_latch_group2_lock)
+  grp:menu_latch	=	+group(menu_latch)
+  grp:menu_latch_lock	=	+group(menu_latch_lock)
+  grp:menu_latch_negative	=	+group(menu_latch_negative)
+  grp:menu_latch_negative_lock	=	+group(menu_latch_negative_lock)
   lv3:switch		=	+level3(switch)
   lv3:ralt_switch	=	+level3(ralt_switch)
   lv3:ralt_switch_multikey	=	+level3(ralt_switch_multikey)
@@ -1086,7 +1092,7 @@
   keypad:future         =	+keypad(future)
   keypad:future_wang    =	+keypad(future_wang)
   keypad:hex            =	+keypad(ops)+keypad(hex)
-  keypad:atm            =	+keypad(ops)+keypad(hex)+keypad(atm)  
+  keypad:atm            =	+keypad(ops)+keypad(hex)+keypad(atm)
   nbsp:none             =	+nbsp(none)
   nbsp:level2           =	+nbsp(level2)
   nbsp:level3           =	+nbsp(level3)
@@ -1151,6 +1157,8 @@
   lv5:lwin_switch_lock_cancel     =       +level5(lwin_switch_lock_cancel)
   lv5:rwin_switch_lock_cancel     =       +level5(rwin_switch_lock_cancel)
   parens:swap_brackets   =   +parens(swap_brackets)
+  overlapping_modifiers:super_hyper =     +overlapping_modifiers(super_hyper)
+  overlapping_modifiers:meta        =     +overlapping_modifiers(meta)
 
 
 ! option	=	compat

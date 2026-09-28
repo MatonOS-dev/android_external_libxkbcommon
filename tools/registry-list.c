@@ -40,6 +40,7 @@ usage(const char *progname, FILE *fp)
             "  --ruleset=foo .......... Load the 'foo' ruleset\n"
             "  --skip-default-paths ... Do not load the default XKB paths\n"
             "  --load-exotic .......... Load the exotic (extra) rulesets\n"
+            "  --help ................. Print this help and exit\n"
             "\n"
             "Trailing arguments are treated as XKB base directory installations.\n",
             progname);
@@ -79,9 +80,6 @@ main(int argc, char **argv)
             case 'h':
                 usage(argv[0], stdout);
                 return 0;
-            case '?':
-                usage(argv[0], stderr);
-                return EXIT_INVALID_USAGE;
             case 'd':
                 load_defaults = false;
                 break;
@@ -94,6 +92,9 @@ main(int argc, char **argv)
             case 'v':
                 verbosity++;
                 break;
+            default:
+                usage(argv[0], stderr);
+                return EXIT_INVALID_USAGE;
         }
     }
 

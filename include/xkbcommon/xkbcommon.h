@@ -169,28 +169,37 @@ typedef uint32_t xkb_keycode_t;
  *
  * A key, represented by a keycode, may generate different symbols according
  * to keyboard state.  For example, on a QWERTY keyboard, pressing the key
- * labled \<A\> generates the symbol 'a'.  If the Shift key is held, it
- * generates the symbol 'A'.  If a different layout is used, say Greek,
- * it generates the symbol 'α'.  And so on.
+ * labled \<A\> generates the symbol ‘a’.  If the Shift key is held, it
+ * generates the symbol ‘A’.  If a different layout is used, say Greek,
+ * it generates the symbol ‘α’.  And so on.
  *
- * Each such symbol is represented by a keysym.  Note that keysyms are
- * somewhat more general, in that they can also represent some "function",
- * such as "Left" or "Right" for the arrow keys.  For more information,
- * see:
- * https://www.x.org/releases/current/doc/xproto/x11protocol.html#keysym_encoding
+ * Each such symbol is represented by a *keysym* (short for “key symbol”).
+ * Note that keysyms are somewhat more general, in that they can also represent
+ * some “function”, such as “Left” or “Right” for the arrow keys.  For more
+ * information, see: Appendix A [“KEYSYM Encoding”][encoding] of the X Window
+ * System Protocol.
  *
  * Specifically named keysyms can be found in the
  * xkbcommon/xkbcommon-keysyms.h header file.  Their name does not include
- * the XKB_KEY_ prefix.
+ * the `XKB_KEY_` prefix.
  *
- * Besides those, any Unicode/ISO 10646 character in the range U0100 to
- * U10FFFF can be represented by a keysym value in the range 0x01000100 to
- * 0x0110FFFF.  The name of Unicode keysyms is "U<codepoint>", e.g. "UA1B2".
+ * Besides those, any Unicode/ISO&nbsp;10646 character in the range U+0100 to
+ * U+10FFFF can be represented by a keysym value in the range 0x01000100 to
+ * 0x0110FFFF.  The name of Unicode keysyms is `U<codepoint>`, e.g. `UA1B2`.
  *
  * The name of other unnamed keysyms is the hexadecimal representation of
- * their value, e.g. "0xabcd1234".
+ * their value, e.g. `0xabcd1234`.
  *
  * Keysym names are case-sensitive.
+ *
+ * @note **Encoding:** Keysyms are 32-bit integers with the 3 most significant
+ * bits always set to zero.  See: Appendix A [“KEYSYM Encoding”][encoding] of
+ * the X Window System Protocol.
+ *
+ * [encoding]: https://www.x.org/releases/current/doc/xproto/x11protocol.html#keysym_encoding
+ *
+ * @ingroup keysyms
+ * @sa XKB_KEYSYM_MAX
  */
 typedef uint32_t xkb_keysym_t;
 
@@ -304,16 +313,25 @@ typedef uint32_t xkb_led_mask_t;
 #define XKB_KEYCODE_MAX     (0xffffffff - 1)
 
 /**
+ * Maximum keysym value
+ *
+ * @since 1.6.0
+ * @sa xkb_keysym_t
+ * @ingroup keysyms
+ */
+#define XKB_KEYSYM_MAX      0x1fffffff
+
+/**
  * Test whether a value is a valid extended keycode.
  * @sa xkb_keycode_t
  **/
-#define xkb_keycode_is_legal_ext(key) (key <= XKB_KEYCODE_MAX)
+#define xkb_keycode_is_legal_ext(key) ((key) <= XKB_KEYCODE_MAX)
 
 /**
  * Test whether a value is a valid X11 keycode.
  * @sa xkb_keycode_t
  */
-#define xkb_keycode_is_legal_x11(key) (key >= 8 && key <= 255)
+#define xkb_keycode_is_legal_x11(key) ((key) >= 8 && (key) <= 255)
 
 /**
  * Names to compile a keymap with, also known as RMLVO.
@@ -380,7 +398,7 @@ struct xkb_rule_names {
 
 /**
  * @defgroup keysyms Keysyms
- * Utility functions related to keysyms.
+ * Utility functions related to *keysyms* (short for “key symbols”).
  *
  * @{
  */
@@ -454,7 +472,7 @@ enum xkb_keysym_flags {
  * invalid flags are passed, this will fail with XKB_KEY_NoSymbol.
  *
  * If you use the XKB_KEYSYM_CASE_INSENSITIVE flag and two keysym names
- * differ only by case, then the lower-case keysym is returned.  For
+ * differ only by case, then the lower-case keysym name is returned.  For
  * instance, for KEY_a and KEY_A, this function would return KEY_a for the
  * case-insensitive search.  If this functionality is needed, it is
  * recommended to first call this function without this flag; and if that
@@ -476,7 +494,7 @@ xkb_keysym_from_name(const char *name, enum xkb_keysym_flags flags);
  *
  * @param[in]  keysym The keysym.
  * @param[out] buffer A buffer to write the UTF-8 string into.
- * @param[in]  size   The size of buffer.  Must be at least 7.
+ * @param[in]  size   The size of buffer.  Must be at least 5.
  *
  * @returns The number of bytes written to the buffer (including the
  * terminating byte).  If the keysym does not have a Unicode
@@ -533,8 +551,22 @@ xkb_utf32_to_keysym(uint32_t ucs);
  *
  * If there is no such form, the keysym is returned unchanged.
  *
- * The conversion rules may be incomplete; prefer to work with the Unicode
+ * The conversion rules are the *simple* (i.e. one-to-one) Unicode case
+ * mappings (with some exceptions, see hereinafter) and do not depend
+ * on the locale. If you need the special case mappings (i.e. not
+ * one-to-one or locale-dependent), prefer to work with the Unicode
  * representation instead, when possible.
+ *
+ * Exceptions to the Unicode mappings:
+ *
+ * | Lower keysym | Lower letter | Upper keysym | Upper letter | Comment |
+ * | ------------ | ------------ | ------------ | ------------ | ------- |
+ * | `ssharp`     | `U+00DF`: ß  | `U1E9E`      | `U+1E9E`: ẞ  | [Council for German Orthography] |
+ *
+ * [Council for German Orthography]: https://www.rechtschreibrat.com/regeln-und-woerterverzeichnis/
+ *
+ * @since 0.8.0: Initial implementation, based on `libX11`.
+ * @since 1.8.0: Use Unicode 16.0 mappings for complete Unicode coverage.
  */
 xkb_keysym_t
 xkb_keysym_to_upper(xkb_keysym_t ks);
@@ -542,8 +574,15 @@ xkb_keysym_to_upper(xkb_keysym_t ks);
 /**
  * Convert a keysym to its lowercase form.
  *
- * The conversion rules may be incomplete; prefer to work with the Unicode
- * representation instead, when possible.
+ * If there is no such form, the keysym is returned unchanged.
+ *
+ * The conversion rules are the *simple* (i.e. one-to-one) Unicode case
+ * mappings and do not depend on the locale. If you need the special
+ * case mappings (i.e. not one-to-one or locale-dependent), prefer to
+ * work with the Unicode representation instead, when possible.
+ *
+ * @since 0.8.0: Initial implementation, based on `libX11`.
+ * @since 1.8.0: Use Unicode 16.0 mappings for complete Unicode coverage.
  */
 xkb_keysym_t
 xkb_keysym_to_lower(xkb_keysym_t ks);
@@ -580,9 +619,17 @@ enum xkb_context_flags {
     XKB_CONTEXT_NO_DEFAULT_INCLUDES = (1 << 0),
     /**
      * Don't take RMLVO names from the environment.
+     *
      * @since 0.3.0
      */
-    XKB_CONTEXT_NO_ENVIRONMENT_NAMES = (1 << 1)
+    XKB_CONTEXT_NO_ENVIRONMENT_NAMES = (1 << 1),
+    /**
+     * Disable the use of secure_getenv for this context, so that privileged
+     * processes can use environment variables. Client uses at their own risk.
+     *
+     * @since 1.5.0
+     */
+    XKB_CONTEXT_NO_SECURE_GETENV = (1 << 2)
 };
 
 /**
@@ -1201,7 +1248,8 @@ xkb_keymap_num_levels_for_key(struct xkb_keymap *keymap, xkb_keycode_t key,
  * @code xkb_keymap_num_levels_for_key(keymap, key) @endcode
  * @param[out] masks_out  A buffer in which the requested masks should be
  * stored.
- * @param[out] masks_size The size of the buffer pointed to by masks_out.
+ * @param[out] masks_size The number of elements in the buffer pointed to by
+ * masks_out.
  *
  * If @c layout is out of range for this key (that is, larger or equal to
  * the value returned by xkb_keymap_num_layouts_for_key()), it is brought
@@ -1333,6 +1381,33 @@ xkb_state_unref(struct xkb_state *state);
 struct xkb_keymap *
 xkb_state_get_keymap(struct xkb_state *state);
 
+/**
+ * @page server-client-state Server State and Client State
+ * @parblock
+ *
+ * The xkb_state API is used by two distinct actors in most window-system
+ * architectures:
+ *
+ * 1. A *server* - for example, a Wayland compositor, an X11 server, an evdev
+ *    listener.
+ *
+ *    Servers maintain the XKB state for a device according to input events from
+ *    the device, such as key presses and releases, and out-of-band events from
+ *    the user, like UI layout switchers.
+ *
+ * 2. A *client* - for example, a Wayland client, an X11 client.
+ *
+ *    Clients do not listen to input from the device; instead, whenever the
+ *    server state changes, the server serializes the state and notifies the
+ *    clients that the state has changed; the clients then update the state
+ *    from the serialization.
+ *
+ * Some entry points in the xkb_state API are only meant for servers and some
+ * are only meant for clients, and the two should generally not be mixed.
+ *
+ * @endparblock
+ */
+
 /** Specifies the direction of the key (press / release). */
 enum xkb_key_direction {
     XKB_KEY_UP,   /**< The key was released. */
@@ -1379,11 +1454,8 @@ enum xkb_state_component {
  * Update the keyboard state to reflect a given key being pressed or
  * released.
  *
- * This entry point is intended for programs which track the keyboard state
- * explicitly (like an evdev client).  If the state is serialized to you by
- * a master process (like a Wayland compositor) using functions like
- * xkb_state_serialize_mods(), you should use xkb_state_update_mask() instead.
- * The two functions should not generally be used together.
+ * This entry point is intended for *server* applications and should not be used
+ * by *client* applications; see @ref server-client-state for details.
  *
  * A series of calls to this function should be consistent; that is, a call
  * with XKB_KEY_DOWN for a key should be matched by an XKB_KEY_UP; if a key
@@ -1411,21 +1483,16 @@ xkb_state_update_key(struct xkb_state *state, xkb_keycode_t key,
 /**
  * Update a keyboard state from a set of explicit masks.
  *
- * This entry point is intended for window systems and the like, where a
- * master process holds an xkb_state, then serializes it over a wire
- * protocol, and clients then use the serialization to feed in to their own
- * xkb_state.
+ * This entry point is intended for *client* applications; see @ref
+ * server-client-state for details. *Server* applications should use
+ * xkb_state_update_key() instead.
  *
  * All parameters must always be passed, or the resulting state may be
  * incoherent.
  *
  * The serialization is lossy and will not survive round trips; it must only
- * be used to feed slave state objects, and must not be used to update the
- * master state.
- *
- * If you do not fit the description above, you should use
- * xkb_state_update_key() instead.  The two functions should not generally be
- * used together.
+ * be used to feed client state objects, and must not be used to update the
+ * server state.
  *
  * @returns A mask of state components that have changed as a result of
  * the update.  If nothing in the state has changed, returns 0.
@@ -1603,6 +1670,10 @@ enum xkb_state_match {
  * The counterpart to xkb_state_update_mask for modifiers, to be used on
  * the server side of serialization.
  *
+ * This entry point is intended for *server* applications; see @ref
+ * server-client-state for details. *Client* applications should use the
+ * xkb_state_mod_*_is_active API.
+ *
  * @param state      The keyboard state.
  * @param components A mask of the modifier state components to serialize.
  * State components other than XKB_STATE_MODS_* are ignored.
@@ -1611,9 +1682,6 @@ enum xkb_state_match {
  *
  * @returns A xkb_mod_mask_t representing the given components of the
  * modifier state.
- *
- * This function should not be used in regular clients; please use the
- * xkb_state_mod_*_is_active API instead.
  *
  * @memberof xkb_state
  */
@@ -1625,6 +1693,10 @@ xkb_state_serialize_mods(struct xkb_state *state,
  * The counterpart to xkb_state_update_mask for layouts, to be used on
  * the server side of serialization.
  *
+ * This entry point is intended for *server* applications; see @ref
+ * server-client-state for details. *Client* applications should use the
+ * xkb_state_layout_*_is_active API.
+ *
  * @param state      The keyboard state.
  * @param components A mask of the layout state components to serialize.
  * State components other than XKB_STATE_LAYOUT_* are ignored.
@@ -1633,9 +1705,6 @@ xkb_state_serialize_mods(struct xkb_state *state,
  *
  * @returns A layout index representing the given components of the
  * layout state.
- *
- * This function should not be used in regular clients; please use the
- * xkb_state_layout_*_is_active API instead.
  *
  * @memberof xkb_state
  */
@@ -1646,10 +1715,19 @@ xkb_state_serialize_layout(struct xkb_state *state,
 /**
  * Test whether a modifier is active in a given keyboard state by name.
  *
+ * @warning For [virtual modifiers], this function may *overmatch* in case
+ * there are virtual modifiers with overlapping mappings to [real modifiers].
+ *
  * @returns 1 if the modifier is active, 0 if it is not.  If the modifier
  * name does not exist in the keymap, returns -1.
  *
  * @memberof xkb_state
+ *
+ * @since 0.1.0: Works only with *real* modifiers
+ * @since 1.8.0: Works also with *virtual* modifiers
+ *
+ * [virtual modifiers]: @ref virtual-modifier-def
+ * [real modifiers]: @ref real-modifier-def
  */
 int
 xkb_state_mod_name_is_active(struct xkb_state *state, const char *name,
@@ -1658,6 +1736,9 @@ xkb_state_mod_name_is_active(struct xkb_state *state, const char *name,
 /**
  * Test whether a set of modifiers are active in a given keyboard state by
  * name.
+ *
+ * @warning For [virtual modifiers], this function may *overmatch* in case
+ * there are virtual modifiers with overlapping mappings to [real modifiers].
  *
  * @param state The keyboard state.
  * @param type  The component of the state against which to match the
@@ -1671,6 +1752,12 @@ xkb_state_mod_name_is_active(struct xkb_state *state, const char *name,
  * the modifier names do not exist in the keymap, returns -1.
  *
  * @memberof xkb_state
+ *
+ * @since 0.1.0: Works only with *real* modifiers
+ * @since 1.8.0: Works also with *virtual* modifiers
+ *
+ * [virtual modifiers]: @ref virtual-modifier-def
+ * [real modifiers]: @ref real-modifier-def
  */
 int
 xkb_state_mod_names_are_active(struct xkb_state *state,
@@ -1681,10 +1768,19 @@ xkb_state_mod_names_are_active(struct xkb_state *state,
 /**
  * Test whether a modifier is active in a given keyboard state by index.
  *
+ * @warning For [virtual modifiers], this function may *overmatch* in case
+ * there are virtual modifiers with overlapping mappings to [real modifiers].
+ *
  * @returns 1 if the modifier is active, 0 if it is not.  If the modifier
  * index is invalid in the keymap, returns -1.
  *
  * @memberof xkb_state
+ *
+ * @since 0.1.0: Works only with *real* modifiers
+ * @since 1.8.0: Works also with *virtual* modifiers
+ *
+ * [virtual modifiers]: @ref virtual-modifier-def
+ * [real modifiers]: @ref real-modifier-def
  */
 int
 xkb_state_mod_index_is_active(struct xkb_state *state, xkb_mod_index_t idx,
@@ -1693,6 +1789,9 @@ xkb_state_mod_index_is_active(struct xkb_state *state, xkb_mod_index_t idx,
 /**
  * Test whether a set of modifiers are active in a given keyboard state by
  * index.
+ *
+ * @warning For [virtual modifiers], this function may *overmatch* in case
+ * there are virtual modifiers with overlapping mappings to [real modifiers].
  *
  * @param state The keyboard state.
  * @param type  The component of the state against which to match the
@@ -1706,6 +1805,12 @@ xkb_state_mod_index_is_active(struct xkb_state *state, xkb_mod_index_t idx,
  * the modifier indices are invalid in the keymap, returns -1.
  *
  * @memberof xkb_state
+ *
+ * @since 0.1.0: Works only with *real* modifiers
+ * @since 1.8.0: Works also with *virtual* modifiers
+ *
+ * [virtual modifiers]: @ref virtual-modifier-def
+ * [real modifiers]: @ref real-modifier-def
  */
 int
 xkb_state_mod_indices_are_active(struct xkb_state *state,
@@ -1822,10 +1927,12 @@ enum xkb_consumed_mode {
  * @param key   The keycode of the key.
  * @param mode  The consumed modifiers mode to use; see enum description.
  *
- * @returns a mask of the consumed modifiers.
+ * @returns a mask of the consumed [real modifiers] modifiers.
  *
  * @memberof xkb_state
  * @since 0.7.0
+ *
+ * [real modifiers]: @ref real-modifier-def
  */
 xkb_mod_mask_t
 xkb_state_key_get_consumed_mods2(struct xkb_state *state, xkb_keycode_t key,
@@ -1844,6 +1951,9 @@ xkb_state_key_get_consumed_mods(struct xkb_state *state, xkb_keycode_t key);
  * Test whether a modifier is consumed by keyboard state translation for
  * a key.
  *
+ * @warning For [virtual modifiers], this function may *overmatch* in case
+ * there are virtual modifiers with overlapping mappings to [real modifiers].
+ *
  * @param state The keyboard state.
  * @param key   The keycode of the key.
  * @param idx   The index of the modifier to check.
@@ -1855,7 +1965,11 @@ xkb_state_key_get_consumed_mods(struct xkb_state *state, xkb_keycode_t key);
  * @sa xkb_state_mod_mask_remove_consumed()
  * @sa xkb_state_key_get_consumed_mods()
  * @memberof xkb_state
- * @since 0.7.0
+ * @since 0.7.0: Works only with *real* modifiers
+ * @since 1.8.0: Works also with *virtual* modifiers
+ *
+ * [virtual modifiers]: @ref virtual-modifier-def
+ * [real modifiers]: @ref real-modifier-def
  */
 int
 xkb_state_mod_index_is_consumed2(struct xkb_state *state,
@@ -1866,8 +1980,15 @@ xkb_state_mod_index_is_consumed2(struct xkb_state *state,
 /**
  * Same as xkb_state_mod_index_is_consumed2() with mode XKB_CONSUMED_MOD_XKB.
  *
+ * @warning For [virtual modifiers], this function may *overmatch* in case
+ * there are virtual modifiers with overlapping mappings to [real modifiers].
+ *
  * @memberof xkb_state
- * @since 0.4.1
+ * @since 0.4.1: Works only with *real* modifiers
+ * @since 1.8.0: Works also with *virtual* modifiers
+ *
+ * [virtual modifiers]: @ref virtual-modifier-def
+ * [real modifiers]: @ref real-modifier-def
  */
 int
 xkb_state_mod_index_is_consumed(struct xkb_state *state, xkb_keycode_t key,
@@ -1881,8 +2002,14 @@ xkb_state_mod_index_is_consumed(struct xkb_state *state, xkb_keycode_t key,
  * Takes the given modifier mask, and removes all modifiers which are
  * consumed for that particular key (as in xkb_state_mod_index_is_consumed()).
  *
+ * @returns a mask of [real modifiers] modifiers.
+ *
  * @sa xkb_state_mod_index_is_consumed()
  * @memberof xkb_state
+ * @since 0.5.0: Works only with *real* modifiers
+ * @since 1.8.0: Works also with *virtual* modifiers
+ *
+ * [real modifiers]: @ref real-modifier-def
  */
 xkb_mod_mask_t
 xkb_state_mod_mask_remove_consumed(struct xkb_state *state, xkb_keycode_t key,

@@ -34,6 +34,16 @@
 #include "utils.h"
 #include "context.h"
 
+char *
+xkb_context_getenv(struct xkb_context *ctx, const char *name)
+{
+    if (ctx->use_secure_getenv) {
+        return secure_getenv(name);
+    } else {
+        return getenv(name);
+    }
+}
+
 unsigned int
 xkb_context_num_failed_include_paths(struct xkb_context *ctx)
 {
@@ -105,7 +115,7 @@ xkb_context_get_default_rules(struct xkb_context *ctx)
     const char *env = NULL;
 
     if (ctx->use_environment_names)
-        env = secure_getenv("XKB_DEFAULT_RULES");
+        env = xkb_context_getenv(ctx, "XKB_DEFAULT_RULES");
 
     return env ? env : DEFAULT_XKB_RULES;
 }
@@ -116,7 +126,7 @@ xkb_context_get_default_model(struct xkb_context *ctx)
     const char *env = NULL;
 
     if (ctx->use_environment_names)
-        env = secure_getenv("XKB_DEFAULT_MODEL");
+        env = xkb_context_getenv(ctx, "XKB_DEFAULT_MODEL");
 
     return env ? env : DEFAULT_XKB_MODEL;
 }
@@ -127,7 +137,7 @@ xkb_context_get_default_layout(struct xkb_context *ctx)
     const char *env = NULL;
 
     if (ctx->use_environment_names)
-        env = secure_getenv("XKB_DEFAULT_LAYOUT");
+        env = xkb_context_getenv(ctx, "XKB_DEFAULT_LAYOUT");
 
     return env ? env : DEFAULT_XKB_LAYOUT;
 }
@@ -136,12 +146,12 @@ static const char *
 xkb_context_get_default_variant(struct xkb_context *ctx)
 {
     const char *env = NULL;
-    const char *layout = secure_getenv("XKB_DEFAULT_LAYOUT");
+    const char *layout = xkb_context_getenv(ctx, "XKB_DEFAULT_LAYOUT");
 
     /* We don't want to inherit the variant if they haven't also set a
      * layout, since they're so closely paired. */
     if (layout && ctx->use_environment_names)
-        env = secure_getenv("XKB_DEFAULT_VARIANT");
+        env = xkb_context_getenv(ctx, "XKB_DEFAULT_VARIANT");
 
     return env ? env : DEFAULT_XKB_VARIANT;
 }
@@ -152,7 +162,7 @@ xkb_context_get_default_options(struct xkb_context *ctx)
     const char *env = NULL;
 
     if (ctx->use_environment_names)
-        env = secure_getenv("XKB_DEFAULT_OPTIONS");
+        env = xkb_context_getenv(ctx, "XKB_DEFAULT_OPTIONS");
 
     return env ? env : DEFAULT_XKB_OPTIONS;
 }
@@ -169,6 +179,16 @@ xkb_context_sanitize_rule_names(struct xkb_context *ctx,
      * the caller and one from the environment. */
     if (isempty(rmlvo->layout)) {
         rmlvo->layout = xkb_context_get_default_layout(ctx);
+        if (!isempty(rmlvo->variant)) {
+            const char *variant = xkb_context_get_default_variant(ctx);
+            log_warn(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "Layout not provided, but variant set to \"%s\": "
+                     "ignoring variant and using defaults for both: "
+                     "layout=\"%s\", variant=\"%s\".\n",
+                     rmlvo->variant,
+                     rmlvo->layout,
+                     variant ? variant : "");
+        }
         rmlvo->variant = xkb_context_get_default_variant(ctx);
     }
     /* Options can be empty, so respect that if passed in. */

@@ -31,20 +31,29 @@
 #include <stdio.h>
 #include <string.h>
 #if HAVE_UNISTD_H
-#include <unistd.h>
+# include <unistd.h>
 #else
 /* Required on Windows where unistd.h doesn't exist */
-#define R_OK    4               /* Test for read permission.  */
-#define W_OK    2               /* Test for write permission.  */
-#define X_OK    1               /* Test for execute permission.  */
-#define F_OK    0               /* Test for existence.  */
+# define R_OK    4               /* Test for read permission.  */
+# define W_OK    2               /* Test for write permission.  */
+# define X_OK    1               /* Test for execute permission.  */
+# define F_OK    0               /* Test for existence.  */
+#endif
+
+#ifdef _WIN32
+# include <direct.h>
+# include <io.h>
+# include <BaseTsd.h>
+# ifndef S_ISDIR
+#  define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+# endif
+# ifndef S_ISREG
+#  define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+# endif
+typedef SSIZE_T ssize_t;
 #endif
 
 #include "darray.h"
-
-#define STATIC_ASSERT(expr, message) do { \
-    switch (0) { case 0: case (expr): ; } \
-} while (0)
 
 #define ARRAY_SIZE(arr) ((sizeof(arr) / sizeof(*(arr))))
 
@@ -53,6 +62,20 @@
 
 /* Round up @a so it's divisible by @b. */
 #define ROUNDUP(a, b) (((a) + (b) - 1) / (b) * (b))
+
+#define STRINGIFY(x) #x
+#define STRINGIFY2(x) STRINGIFY(x)
+#define CONCAT(x,y) x ## y
+#define CONCAT2(x,y) CONCAT(x,y)
+
+/* Check if a character is valid in a string literal */
+static inline bool
+is_valid_char(char c)
+{
+    /* Currently we only check for NULL character, but this could be extended
+     * in the future to further ASCII control characters. */
+    return c != 0;
+}
 
 char
 to_lower(char c);
@@ -154,6 +177,12 @@ strndup(const char *s, size_t n)
 
 /* ctype.h is locale-dependent and has other oddities. */
 static inline bool
+is_ascii(char ch)
+{
+    return (ch & ~0x7f) == 0;
+}
+
+static inline bool
 is_space(char ch)
 {
     return ch == ' ' || (ch >= '\t' && ch <= '\r');
@@ -235,6 +264,9 @@ check_eaccess(const char *path, int mode)
     return true;
 }
 
+FILE*
+open_file(const char *path);
+
 #if defined(HAVE_SECURE_GETENV)
 # define secure_getenv secure_getenv
 #elif defined(HAVE___SECURE_GETENV)
@@ -261,7 +293,9 @@ check_eaccess(const char *path, int mode)
 # define XKB_EXPORT
 #endif
 
-#if defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 203)
+#if defined(__MINGW32__)
+# define ATTR_PRINTF(x,y) __attribute__((__format__(__MINGW_PRINTF_FORMAT, x, y)))
+#elif defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 203)
 # define ATTR_PRINTF(x,y) __attribute__((__format__(__printf__, x, y)))
 #else /* not gcc >= 2.3 */
 # define ATTR_PRINTF(x,y)

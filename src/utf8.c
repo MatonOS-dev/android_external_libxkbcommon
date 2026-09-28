@@ -26,12 +26,13 @@
 
 #include "config.h"
 
-#include <stddef.h>
-#include <stdbool.h>
-#include <inttypes.h>
-
 #include "utf8.h"
 
+/* Conformant encoding form conversion from UTF-32 to UTF-8.
+ *
+ * See https://www.unicode.org/versions/Unicode15.0.0/ch03.pdf#G28875
+ * for further details.
+*/
 int
 utf32_to_utf8(uint32_t unichar, char *buffer)
 {
@@ -39,13 +40,17 @@ utf32_to_utf8(uint32_t unichar, char *buffer)
     uint8_t head;
 
     if (unichar <= 0x007f) {
-        buffer[0] = unichar;
+        buffer[0] = (char) unichar;
         buffer[1] = '\0';
         return 2;
     }
     else if (unichar <= 0x07FF) {
         length = 2;
         head = 0xc0;
+    }
+    /* Handle surrogates */
+    else if (0xd800 <= unichar && unichar <= 0xdfff) {
+        goto ill_formed_code_unit_subsequence;
     }
     else if (unichar <= 0xffff) {
         length = 3;
@@ -56,17 +61,20 @@ utf32_to_utf8(uint32_t unichar, char *buffer)
         head = 0xf0;
     }
     else {
-        buffer[0] = '\0';
-        return 0;
+        goto ill_formed_code_unit_subsequence;
     }
 
     for (count = length - 1, shift = 0; count > 0; count--, shift += 6)
-        buffer[count] = 0x80 | ((unichar >> shift) & 0x3f);
+        buffer[count] = (char)(0x80 | ((unichar >> shift) & 0x3f));
 
-    buffer[0] = head | ((unichar >> shift) & 0x3f);
+    buffer[0] = (char)(head | ((unichar >> shift) & 0x3f));
     buffer[length] = '\0';
 
     return length + 1;
+
+ill_formed_code_unit_subsequence:
+    buffer[0] = '\0';
+    return 0;
 }
 
 bool

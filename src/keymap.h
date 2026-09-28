@@ -104,10 +104,13 @@
 #define XKB_MAX_GROUPS 4
 
 /* Don't allow more modifiers than we can hold in xkb_mod_mask_t. */
-#define XKB_MAX_MODS ((xkb_mod_index_t) (sizeof(xkb_mod_mask_t) * 8))
+#define XKB_MAX_MODS ((xkb_mod_index_t) (sizeof(xkb_mod_mask_t) * CHAR_BIT))
 
 /* Don't allow more leds than we can hold in xkb_led_mask_t. */
-#define XKB_MAX_LEDS ((xkb_led_index_t) (sizeof(xkb_led_mask_t) * 8))
+#define XKB_MAX_LEDS ((xkb_led_index_t) (sizeof(xkb_led_mask_t) * CHAR_BIT))
+
+/* Special value to handle modMap None {…} */
+#define XKB_MOD_NONE 0xffffffffU
 
 /* These should all go away. */
 enum mod_type {
@@ -313,19 +316,44 @@ enum xkb_explicit_components {
 };
 
 struct xkb_level {
-    union xkb_action action;
+    /* Count of keysyms */
     unsigned int num_syms;
+    /* Count of actions */
+    unsigned int num_actions;
+    /* Keysyms */
     union {
-        xkb_keysym_t sym;       /* num_syms == 1 */
-        xkb_keysym_t *syms;     /* num_syms > 1  */
-    } u;
+        xkb_keysym_t sym;          /* num_syms == 1 */
+        xkb_keysym_t *syms;        /* num_syms > 1  */
+    } s;
+    /* Actions */
+    union {
+        union xkb_action action;   /* num_actions == 1 */
+        union xkb_action *actions; /* num_actions >  1 */
+    } a;
 };
 
+/**
+ * Group in a key
+ */
 struct xkb_group {
-    bool explicit_type;
-    /* Points to a type in keymap->types. */
+    /**
+     * Flag that indicates whether a group has explicit actions. In case it has,
+     * compatibility interpretations will not be used on it.
+     * See also EXPLICIT_INTERP flag at key level.
+     */
+    bool explicit_actions:1;
+    /**
+     * Flag that indicates whether a group has an explicit key type. In case it
+     * has, type detection will not be used on it.
+     */
+    bool explicit_type:1;
+    /**
+     * Key type of the group. Points to an entry in keymap->types.
+     */
     const struct xkb_key_type *type;
-    /* Use XkbKeyNumLevels for the number of levels. */
+    /**
+     * Array of group levels. Use `XkbKeyNumLevels` for the number of levels.
+     */
     struct xkb_level *levels;
 };
 
@@ -356,7 +384,38 @@ struct xkb_mod {
 struct xkb_mod_set {
     struct xkb_mod mods[XKB_MAX_MODS];
     unsigned int num_mods;
+    xkb_mod_mask_t explicit_vmods;
 };
+
+/*
+ * Our current implementation with continuous arrays does not allow efficient
+ * mapping of keycodes. Allowing the API max valid keycode XKB_KEYCODE_MAX could
+ * result in memory exhaustion or memory waste (sparse arrays) with huge enough
+ * valid values. Let’s be more conservative for now, based on the existing Linux
+ * keycodes.
+ */
+#define XKB_KEYCODE_MAX_IMPL 0xfff
+static_assert(XKB_KEYCODE_MAX_IMPL < XKB_KEYCODE_MAX,
+              "Valid keycodes");
+static_assert(XKB_KEYCODE_MAX_IMPL < darray_max_alloc(sizeof(xkb_atom_t)),
+              "Max keycodes names");
+static_assert(XKB_KEYCODE_MAX_IMPL < darray_max_alloc(sizeof(struct xkb_key)),
+              "Max keymap keys");
+
+/*
+ * Our current implementation with continuous arrays does not allow efficient
+ * mapping of levels. Allowing the max valid level UINT32_MAX could result in
+ * memory exhaustion or memory waste (sparse arrays) with huge enough valid
+ * values. Let’s be more conservative for now. This value should be big enough
+ * to satisfy automatically generated keymaps.
+ */
+#define XKB_LEVEL_MAX_IMPL 2048
+static_assert(XKB_LEVEL_MAX_IMPL < XKB_LEVEL_INVALID,
+              "Valid levels");
+static_assert(XKB_LEVEL_MAX_IMPL < darray_max_alloc(sizeof(xkb_atom_t)),
+              "Max key types level names");
+static_assert(XKB_LEVEL_MAX_IMPL < darray_max_alloc(sizeof(struct xkb_level)),
+              "Max keys levels");
 
 /* Common keyboard description structure */
 struct xkb_keymap {
@@ -384,7 +443,9 @@ struct xkb_keymap {
 
     struct xkb_mod_set mods;
 
-    /* Number of groups in the key with the most groups. */
+    /* This field has 2 uses:
+     * • During parsing: Expected layouts count after RMLVO resolution, if any;
+     * • After parsing: Number of groups in the key with the most groups. */
     xkb_layout_index_t num_groups;
     /* Not all groups must have names. */
     xkb_layout_index_t num_group_names;
@@ -408,6 +469,12 @@ struct xkb_keymap {
     for ((iter) = (mods_)->mods; \
          (iter) < (mods_)->mods + (mods_)->num_mods; \
          (iter)++)
+
+#define xkb_mods_mask_foreach(mask, iter, mods_) \
+    for ((iter) = (mods_)->mods; \
+         (mask) && (iter) < (mods_)->mods + (mods_)->num_mods; \
+         (iter)++, (mask) >>= 1) \
+        if ((mask) & 0x1)
 
 #define xkb_mods_enumerate(idx, iter, mods_) \
     for ((idx) = 0, (iter) = (mods_)->mods; \
@@ -470,6 +537,9 @@ XkbModNameToIndex(const struct xkb_mod_set *mods, xkb_atom_t name,
 bool
 XkbLevelsSameSyms(const struct xkb_level *a, const struct xkb_level *b);
 
+bool
+XkbLevelsSameActions(const struct xkb_level *a, const struct xkb_level *b);
+
 xkb_layout_index_t
 XkbWrapGroupIntoRange(int32_t group,
                       xkb_layout_index_t num_groups,
@@ -478,6 +548,13 @@ XkbWrapGroupIntoRange(int32_t group,
 
 xkb_mod_mask_t
 mod_mask_get_effective(struct xkb_keymap *keymap, xkb_mod_mask_t mods);
+
+unsigned int
+xkb_keymap_key_get_actions_by_level(struct xkb_keymap *keymap,
+                                    xkb_keycode_t kc,
+                                    xkb_layout_index_t layout,
+                                    xkb_level_index_t level,
+                                    const union xkb_action **actions);
 
 struct xkb_keymap_format_ops {
     bool (*keymap_new_from_names)(struct xkb_keymap *keymap,

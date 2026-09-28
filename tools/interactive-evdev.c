@@ -43,6 +43,7 @@
 
 #include "xkbcommon/xkbcommon.h"
 
+#include "src/utils.h"
 #include "tools-common.h"
 
 struct keyboard {
@@ -53,18 +54,27 @@ struct keyboard {
     struct keyboard *next;
 };
 
+static bool verbose = false;
 static bool terminate;
 static int evdev_offset = 8;
 static bool report_state_changes;
 static bool with_compose;
 static enum xkb_consumed_mode consumed_mode = XKB_CONSUMED_MODE_XKB;
 
+#ifdef ENABLE_PRIVATE_APIS
+#define DEFAULT_PRINT_FIELDS (PRINT_ALL_FIELDS & ~PRINT_MODMAPS)
+#else
+#define DEFAULT_PRINT_FIELDS PRINT_ALL_FIELDS
+#endif
+print_state_fields_mask_t print_fields = DEFAULT_PRINT_FIELDS;
+
+#define DEFAULT_INCLUDE_PATH_PLACEHOLDER "__defaults__"
 #define NLONGS(n) (((n) + LONG_BIT - 1) / LONG_BIT)
 
 static bool
 evdev_bit_is_set(const unsigned long *array, int bit)
 {
-    return array[bit / LONG_BIT] & (1LL << (bit % LONG_BIT));
+    return array[bit / LONG_BIT] & (1ULL << (bit % LONG_BIT));
 }
 
 /* Some heuristics to see if the device is a keyboard. */
@@ -270,9 +280,12 @@ process_event(struct keyboard *kbd, uint16_t type, uint16_t code, int32_t value)
         xkb_compose_state_feed(kbd->compose_state, keysym);
     }
 
-    if (value != KEY_STATE_RELEASE)
-        tools_print_keycode_state(kbd->state, kbd->compose_state, keycode,
-                                  consumed_mode);
+    if (value != KEY_STATE_RELEASE) {
+        tools_print_keycode_state(
+            NULL, kbd->state, kbd->compose_state, keycode,
+            consumed_mode, print_fields
+        );
+    }
 
     if (with_compose) {
         status = xkb_compose_state_get_status(kbd->compose_state);
@@ -365,16 +378,24 @@ sigintr_handler(int signum)
 static void
 usage(FILE *fp, char *progname)
 {
-        fprintf(fp, "Usage: %s [--rules=<rules>] [--model=<model>] "
-                "[--layout=<layout>] [--variant=<variant>] [--options=<options>]\n",
+        fprintf(fp, "Usage: %s [--include=<path>] [--include-defaults] "
+                "[--rules=<rules>] [--model=<model>] [--layout=<layout>] "
+                "[--variant=<variant>] [--options=<options>]\n",
                 progname);
-        fprintf(fp, "      or: %s --keymap <path to keymap file>\n",
+        fprintf(fp, "   or: %s --keymap <path to keymap file>\n",
                 progname);
         fprintf(fp, "For both:\n"
+                        "          --verbose (enable verbose debugging output)\n"
+#ifdef ENABLE_PRIVATE_APIS
+                        "          --print-modmaps (print real & virtual key modmaps)\n"
+#endif
+                        "          --short (do not print layout nor Unicode keysym translation)\n"
                         "          --report-state-changes (report changes to the state)\n"
                         "          --enable-compose (enable Compose)\n"
                         "          --consumed-mode={xkb|gtk} (select the consumed modifiers mode, default: xkb)\n"
                         "          --without-x11-offset (don't add X11 keycode offset)\n"
+                    "Other:\n"
+                        "          --help (display this help and exit)\n"
         );
 }
 
@@ -386,6 +407,8 @@ main(int argc, char *argv[])
     struct xkb_context *ctx = NULL;
     struct xkb_keymap *keymap = NULL;
     struct xkb_compose_table *compose_table = NULL;
+    const char *includes[64];
+    size_t num_includes = 0;
     const char *rules = NULL;
     const char *model = NULL;
     const char *layout = NULL;
@@ -395,6 +418,9 @@ main(int argc, char *argv[])
     const char *locale;
     struct sigaction act;
     enum options {
+        OPT_VERBOSE,
+        OPT_INCLUDE,
+        OPT_INCLUDE_DEFAULTS,
         OPT_RULES,
         OPT_MODEL,
         OPT_LAYOUT,
@@ -404,10 +430,17 @@ main(int argc, char *argv[])
         OPT_WITHOUT_X11_OFFSET,
         OPT_CONSUMED_MODE,
         OPT_COMPOSE,
+        OPT_SHORT,
         OPT_REPORT_STATE,
+#ifdef ENABLE_PRIVATE_APIS
+        OPT_PRINT_MODMAPS,
+#endif
     };
     static struct option opts[] = {
         {"help",                 no_argument,            0, 'h'},
+        {"verbose",              no_argument,            0, OPT_VERBOSE},
+        {"include",              required_argument,      0, OPT_INCLUDE},
+        {"include-defaults",     no_argument,            0, OPT_INCLUDE_DEFAULTS},
         {"rules",                required_argument,      0, OPT_RULES},
         {"model",                required_argument,      0, OPT_MODEL},
         {"layout",               required_argument,      0, OPT_LAYOUT},
@@ -416,38 +449,71 @@ main(int argc, char *argv[])
         {"keymap",               required_argument,      0, OPT_KEYMAP},
         {"consumed-mode",        required_argument,      0, OPT_CONSUMED_MODE},
         {"enable-compose",       no_argument,            0, OPT_COMPOSE},
+        {"short",                no_argument,            0, OPT_SHORT},
         {"report-state-changes", no_argument,            0, OPT_REPORT_STATE},
         {"without-x11-offset",   no_argument,            0, OPT_WITHOUT_X11_OFFSET},
+#ifdef ENABLE_PRIVATE_APIS
+        {"print-modmaps",        no_argument,            0, OPT_PRINT_MODMAPS},
+#endif
         {0, 0, 0, 0},
     };
 
     setlocale(LC_ALL, "");
 
+    bool has_rmlvo_options = false;
     while (1) {
-        int opt;
         int option_index = 0;
-
-        opt = getopt_long(argc, argv, "h", opts, &option_index);
+        int opt = getopt_long(argc, argv, "h", opts, &option_index);
         if (opt == -1)
             break;
 
         switch (opt) {
+        case OPT_VERBOSE:
+            verbose = true;
+            break;
+        case OPT_INCLUDE:
+            if (num_includes >= ARRAY_SIZE(includes))
+                goto too_many_includes;
+            includes[num_includes++] = optarg;
+            break;
+        case OPT_INCLUDE_DEFAULTS:
+            if (num_includes >= ARRAY_SIZE(includes))
+                goto too_many_includes;
+            includes[num_includes++] = DEFAULT_INCLUDE_PATH_PLACEHOLDER;
+            break;
         case OPT_RULES:
+            if (keymap_path)
+                goto input_format_error;
             rules = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_MODEL:
+            if (keymap_path)
+                goto input_format_error;
             model = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_LAYOUT:
+            if (keymap_path)
+                goto input_format_error;
             layout = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_VARIANT:
+            if (keymap_path)
+                goto input_format_error;
             variant = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_OPTION:
+            if (keymap_path)
+                goto input_format_error;
             options = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_KEYMAP:
+            if (has_rmlvo_options)
+                goto input_format_error;
             keymap_path = optarg;
             break;
         case OPT_WITHOUT_X11_OFFSET:
@@ -459,36 +525,73 @@ main(int argc, char *argv[])
         case OPT_COMPOSE:
             with_compose = true;
             break;
+        case OPT_SHORT:
+            print_fields &= ~PRINT_VERBOSE_FIELDS;
+            break;
         case OPT_CONSUMED_MODE:
             if (strcmp(optarg, "gtk") == 0) {
                 consumed_mode = XKB_CONSUMED_MODE_GTK;
             } else if (strcmp(optarg, "xkb") == 0) {
                 consumed_mode = XKB_CONSUMED_MODE_XKB;
             } else {
-                fprintf(stderr, "error: invalid --consumed-mode \"%s\"\n", optarg);
+                fprintf(stderr, "ERROR: invalid --consumed-mode \"%s\"\n", optarg);
                 usage(stderr, argv[0]);
                 return EXIT_INVALID_USAGE;
             }
             break;
+#ifdef ENABLE_PRIVATE_APIS
+        case OPT_PRINT_MODMAPS:
+            print_fields |= PRINT_MODMAPS;
+            break;
+#endif
         case 'h':
             usage(stdout, argv[0]);
             return EXIT_SUCCESS;
-        case '?':
+        default:
             usage(stderr, argv[0]);
             return EXIT_INVALID_USAGE;
         }
     }
 
-    ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    if (optind < argc && !isempty(argv[optind])) {
+        /* Some positional arguments left: use as a keymap input */
+        if (keymap_path || has_rmlvo_options)
+            goto too_much_arguments;
+        keymap_path = argv[optind++];
+        if (optind < argc) {
+too_much_arguments:
+            fprintf(stderr, "ERROR: Too much positional arguments\n");
+            usage(stderr, argv[0]);
+            exit(EXIT_INVALID_USAGE);
+        }
+    }
+
+    ctx = xkb_context_new(XKB_CONTEXT_NO_DEFAULT_INCLUDES);
     if (!ctx) {
-        fprintf(stderr, "Couldn't create xkb context\n");
+        fprintf(stderr, "ERROR: Couldn't create xkb context\n");
         goto out;
+    }
+
+    if (verbose) {
+        xkb_context_set_log_level(ctx, XKB_LOG_LEVEL_DEBUG);
+        xkb_context_set_log_verbosity(ctx, 10);
+    }
+
+    if (num_includes == 0)
+        includes[num_includes++] = DEFAULT_INCLUDE_PATH_PLACEHOLDER;
+
+    for (size_t i = 0; i < num_includes; i++) {
+        const char *include = includes[i];
+        if (strcmp(include, DEFAULT_INCLUDE_PATH_PLACEHOLDER) == 0)
+            xkb_context_include_path_append_default(ctx);
+        else
+            xkb_context_include_path_append(ctx, include);
     }
 
     if (keymap_path) {
         FILE *file = fopen(keymap_path, "rb");
         if (!file) {
-            fprintf(stderr, "Couldn't open '%s': %s\n",
+            fprintf(stderr, "ERROR: Couldn't open '%s': %s\n",
                     keymap_path, strerror(errno));
             goto out;
         }
@@ -513,14 +616,15 @@ main(int argc, char *argv[])
 
         if (!keymap) {
             fprintf(stderr,
-                    "Failed to compile RMLVO: '%s', '%s', '%s', '%s', '%s'\n",
+                    "ERROR: Failed to compile RMLVO: "
+                    "'%s', '%s', '%s', '%s', '%s'\n",
                     rules, model, layout, variant, options);
             goto out;
         }
     }
 
     if (!keymap) {
-        fprintf(stderr, "Couldn't create xkb keymap\n");
+        fprintf(stderr, "ERROR: Couldn't create xkb keymap\n");
         goto out;
     }
 
@@ -530,7 +634,7 @@ main(int argc, char *argv[])
             xkb_compose_table_new_from_locale(ctx, locale,
                                               XKB_COMPOSE_COMPILE_NO_FLAGS);
         if (!compose_table) {
-            fprintf(stderr, "Couldn't create compose from locale\n");
+            fprintf(stderr, "ERROR: Couldn't create compose from locale\n");
             goto out;
         }
     }
@@ -539,6 +643,15 @@ main(int argc, char *argv[])
     if (!kbds) {
         goto out;
     }
+
+#ifdef ENABLE_PRIVATE_APIS
+    if (print_fields & PRINT_MODMAPS) {
+        print_keys_modmaps(keymap);
+        putchar('\n');
+        print_keymap_modmaps(keymap);
+        putchar('\n');
+    }
+#endif
 
     act.sa_handler = sigintr_handler;
     sigemptyset(&act.sa_mask);
@@ -557,4 +670,14 @@ out:
     xkb_context_unref(ctx);
 
     return ret;
+
+too_many_includes:
+    fprintf(stderr, "ERROR: too many includes (max: %zu)\n",
+            ARRAY_SIZE(includes));
+    exit(EXIT_INVALID_USAGE);
+
+input_format_error:
+    fprintf(stderr, "ERROR: Cannot use RMLVO options with keymap input\n");
+    usage(stderr, argv[0]);
+    exit(EXIT_INVALID_USAGE);
 }

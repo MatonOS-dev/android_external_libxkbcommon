@@ -73,8 +73,6 @@
 #include "config.h"
 
 #include <assert.h>
-#include <inttypes.h>
-#include <stdbool.h>
 #include <string.h>
 
 #include "atom.h"
@@ -85,7 +83,7 @@
 static inline uint32_t
 hash_buf(const char *string, size_t len)
 {
-    uint32_t hash = 2166136261u;
+    uint32_t hash = UINT32_C(2166136261);
     for (size_t i = 0; i < (len + 1) / 2; i++) {
         hash ^= (uint8_t) string[i];
         hash *= 0x01000193;
@@ -145,7 +143,8 @@ atom_text(struct atom_table *table, xkb_atom_t atom)
 xkb_atom_t
 atom_intern(struct atom_table *table, const char *string, size_t len, bool add)
 {
-    if (darray_size(table->strings) > 0.80 * table->index_size) {
+    /* len(string) > 0.8 * index_size */
+    if (darray_size(table->strings) > (table->index_size / 5) * 4) {
         table->index_size *= 2;
         table->index = realloc(table->index, table->index_size * sizeof(*table->index));
         memset(table->index, 0, table->index_size * sizeof(*table->index));

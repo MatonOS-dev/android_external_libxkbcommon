@@ -41,8 +41,8 @@ struct xkb_compose_state {
      * This is also sufficient for inferring the current status; see
      * xkb_compose_state_get_status().
      */
-    uint16_t prev_context;
-    uint16_t context;
+    uint32_t prev_context;
+    uint32_t context;
 };
 
 XKB_EXPORT struct xkb_compose_state *
@@ -91,7 +91,7 @@ xkb_compose_state_get_compose_table(struct xkb_compose_state *state)
 XKB_EXPORT enum xkb_compose_feed_result
 xkb_compose_state_feed(struct xkb_compose_state *state, xkb_keysym_t keysym)
 {
-    uint16_t context;
+    uint32_t context;
     const struct compose_node *node;
 
     /*
@@ -168,17 +168,17 @@ xkb_compose_state_get_utf8(struct xkb_compose_state *state,
     /* If there's no string specified, but only a keysym, try to do the
      * most helpful thing. */
     if (node->leaf.utf8 == 0 && node->leaf.keysym != XKB_KEY_NoSymbol) {
-        char name[64];
+        char utf8[XKB_KEYSYM_UTF8_MAX_SIZE];
         int ret;
 
-        ret = xkb_keysym_to_utf8(node->leaf.keysym, name, sizeof(name));
+        ret = xkb_keysym_to_utf8(node->leaf.keysym, utf8, sizeof(utf8));
         if (ret < 0 || ret == 0) {
             /* ret < 0 is impossible.
              * ret == 0 means the keysym has no string representation. */
             goto fail;
         }
 
-        return snprintf(buffer, size, "%s", name);
+        return snprintf(buffer, size, "%s", utf8);
     }
 
     return snprintf(buffer, size, "%s",
