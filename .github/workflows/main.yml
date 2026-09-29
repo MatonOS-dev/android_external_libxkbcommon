@@ -13,7 +13,7 @@ jobs:
       matrix:
         compiler: [clang, gcc]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v1
         with:
           python-version: '3.7'
@@ -39,7 +39,7 @@ jobs:
   macos:
     runs-on: macos-10.15
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v1
         with:
           python-version: '3.7'
@@ -64,7 +64,7 @@ jobs:
   windows:
     runs-on: windows-2019
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v1
         with:
           python-version: '3.7'
